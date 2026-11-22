@@ -1101,7 +1101,13 @@ fn detail(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             "history-delete",
             ld::TRASH_ICON,
             tr("Delete…"),
-            move |ui: &mut Ui, _| ui.history.arm_delete(id),
+            move |ui: &mut Ui, tx| {
+                ui.history.arm_delete(id);
+                // Delete… leaves as its confirmation comes in; focus goes to
+                // the confirmation's Cancel, not Rune's next stop (the search
+                // field, which would take Escape).
+                tx.focus("history-cancel-delete", false);
+            },
         ));
     }
     col()
