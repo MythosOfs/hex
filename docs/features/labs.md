@@ -74,7 +74,9 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        (space , . ! ? ; : )) after a clear typo replaces the word (German and English models at
 │                                        once, weighted edit distance with neighbouring keys, `linux/autocorrect`), and Backspace
 │                                        right after a fix restores the typed word and learns it; an unknown word typed twice is
-│                                        learned too (owner-only `autocorrect.json`, nothing else stored). Password, PIN, terminal,
+│                                        learned too, and a word Hex fixed or left that you delete and retype as a near spelling
+│                                        in the same place twice becomes a fix (owner-only `autocorrect.json`, only those words
+│                                        and pairs stored). Password, PIN, terminal,
 │                                        URL, e-mail, and number fields are skipped; while it holds the seat, Live typing and other
 │                                        input methods (Fcitx5, IBus) get it unavailable. Apps need text-input-v3 surrounding text
 │                                        (GTK, Qt, Firefox; Chromium/Electron with --enable-wayland-ime)

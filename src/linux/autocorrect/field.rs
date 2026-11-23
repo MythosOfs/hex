@@ -3,6 +3,8 @@
 //! acts on exactly two edits: one word-ending character typed after a word
 //! (fix the word), and Backspace right after a fix (put the typed word back
 //! and learn it). Anything else (a paste, a jump, a selection) only moves on.
+//! It also notices a word Hex fixed or left that you deleted and typed again
+//! differently in the same place, and hands that pair to `Learned`.
 
 use super::correct::{Corrector, Verdict};
 use super::learned::Learned;
@@ -26,6 +28,9 @@ pub(crate) struct Field {
     expect: Option<String>,
     /// The fix just made, while Backspace may still take it back.
     last: Option<Applied>,
+    /// The last word Hex fixed or didn't know, as you typed it, and the text
+    /// before it: retyped in that place, it teaches a typo.
+    finished: Option<(String, String)>,
 }
 
 struct Applied {
@@ -92,8 +97,17 @@ impl Field {
         let earlier = &now[..now.len() - ending.len()];
         let word = current_word(earlier)?;
         let prefix = &earlier[..earlier.len() - word.len()];
-        match corrector.correct(word, previous_word(prefix), learned) {
+        let verdict = corrector.correct(word, previous_word(prefix), learned);
+        if let Some((before, typo)) = self.finished.take()
+            && verdict == Verdict::Leave
+            && before == prefix
+            && Corrector::slip(&typo, word)
+        {
+            learned.retyped(&typo, word);
+        }
+        match verdict {
             Verdict::Fix(fix) => {
+                self.finished = Some((prefix.to_owned(), word.to_owned()));
                 self.expect = Some(format!("{prefix}{fix}{ending}"));
                 self.last = Some(Applied {
                     original: word.to_owned(),
@@ -106,6 +120,7 @@ impl Field {
                 })
             }
             Verdict::Unknown => {
+                self.finished = Some((prefix.to_owned(), word.to_owned()));
                 learned.typed(word);
                 None
             }
@@ -195,6 +210,20 @@ mod tests {
         assert_eq!(text, "Das ist abgekürzt and brilliant, the end. teh");
         type_into(&mut field, &corrector, &mut learned, &mut text, " teh ");
         assert_eq!(text, "Das ist abgekürzt and brilliant, the end. teh teh ");
+    }
+
+    #[test]
+    fn a_word_retyped_the_same_way_twice_is_fixed_the_third_time() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        let mut field = Field::default();
+        let mut text = String::new();
+        let retype = "realy \u{8}\u{8}ly. ";
+        type_into(&mut field, &corrector, &mut learned, &mut text, retype);
+        type_into(&mut field, &corrector, &mut learned, &mut text, retype);
+        assert_eq!(text, "really. really. ");
+        type_into(&mut field, &corrector, &mut learned, &mut text, "realy ");
+        assert_eq!(text, "really. really. really ");
     }
 
     #[test]

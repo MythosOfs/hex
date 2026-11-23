@@ -1,8 +1,10 @@
 //! The words autocorrect learned from you, as the phone keyboards learn: a
 //! word you took a correction back from is yours at once, and a word Hex
 //! didn't know becomes yours once you've typed it twice. Learned words are
-//! never corrected, and typos of them are fixed to them. Only these words are
-//! kept, owner-only in `autocorrect.json`; nothing else you type is stored.
+//! never corrected, and typos of them are fixed to them. A typo you retyped
+//! the same way twice is fixed that way from then on. Only these words and
+//! pairs are kept, owner-only in `autocorrect.json`; nothing else you type is
+//! stored.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,6 +20,9 @@ const LIMIT: usize = 5_000;
 pub(crate) struct Learned {
     #[serde(default)]
     words: BTreeMap<String, Entry>,
+    /// Lowercased typo → the word you retyped it as.
+    #[serde(default)]
+    typos: BTreeMap<String, Typo>,
     /// Counts changes since loading, so the owner knows when to save.
     #[serde(skip)]
     generation: u64,
@@ -30,6 +35,12 @@ struct Entry {
     typed: u32,
     /// You took a correction of it back.
     kept: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Typo {
+    word: String,
+    retyped: u32,
 }
 
 impl Entry {
@@ -60,6 +71,14 @@ impl Learned {
         self.words.get(lower).is_some_and(Entry::learned)
     }
 
+    /// The word you retyped `lower` as, once you've done so twice.
+    pub(crate) fn typo(&self, lower: &str) -> Option<&str> {
+        self.typos
+            .get(lower)
+            .filter(|typo| typo.retyped >= TYPED_TO_LEARN)
+            .map(|typo| typo.word.as_str())
+    }
+
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -74,7 +93,49 @@ impl Learned {
 
     /// You took a correction of `word` back: it is yours from now on.
     pub(crate) fn keep(&mut self, word: &str) {
+        self.typos.remove(&word.to_lowercase());
         self.entry(word).kept = true;
+    }
+
+    /// You deleted `typo`, which Hex fixed or left, and typed `word` in its
+    /// place.
+    pub(crate) fn retyped(&mut self, typo: &str, word: &str) {
+        self.generation += 1;
+        let (typo, lower) = (typo.to_lowercase(), word.to_lowercase());
+        // Not one of your words after all.
+        self.words.remove(&typo);
+        // You fixed it the other way round before: neither is a typo.
+        if self
+            .typos
+            .get(&lower)
+            .is_some_and(|other| other.word.to_lowercase() == typo)
+        {
+            self.typos.remove(&lower);
+            return;
+        }
+        if self.typos.len() >= LIMIT && !self.typos.contains_key(&typo) {
+            let least = self
+                .typos
+                .iter()
+                .min_by_key(|(_, typo)| typo.retyped)
+                .map(|(key, _)| key.clone());
+            if let Some(least) = least {
+                self.typos.remove(&least);
+            }
+        }
+        let entry = self.typos.entry(typo).or_insert_with(|| Typo {
+            word: word.to_owned(),
+            retyped: 0,
+        });
+        // Retyped as another word: start counting that one.
+        if entry.word.to_lowercase() != lower {
+            entry.retyped = 0;
+        }
+        // A capital at a sentence's start isn't your spelling.
+        if entry.word.to_lowercase() != lower || word == lower {
+            entry.word = word.to_owned();
+        }
+        entry.retyped = entry.retyped.saturating_add(1);
     }
 
     /// Hex left `word`, which no language knows, as you typed it.
@@ -141,6 +202,29 @@ mod tests {
         std::fs::write(&path, b"not json").unwrap();
         assert!(!Learned::load(&path).knows("github"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_typo_retyped_the_same_way_twice_is_learned() {
+        let mut learned = Learned::default();
+        learned.typed("realy");
+        learned.retyped("Realy", "Really");
+        assert_eq!(learned.typo("realy"), None);
+        learned.retyped("realy", "really");
+        assert_eq!(learned.typo("realy"), Some("really"));
+        assert!(!learned.knows("realy"));
+        learned.retyped("realy", "relay");
+        assert_eq!(learned.typo("realy"), None, "retyped another way");
+        learned.retyped("realy", "relay");
+        assert_eq!(learned.typo("realy"), Some("relay"));
+        learned.keep("realy");
+        assert_eq!(learned.typo("realy"), None, "taken back");
+
+        learned.retyped("teh", "the");
+        learned.retyped("teh", "the");
+        learned.retyped("the", "teh");
+        assert_eq!(learned.typo("teh"), None, "fixed both ways");
+        assert_eq!(learned.typo("the"), None);
     }
 
     #[test]

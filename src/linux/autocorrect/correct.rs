@@ -75,6 +75,9 @@ impl Corrector {
         {
             return Verdict::Leave;
         }
+        if let Some(word) = learned.typo(&lower) {
+            return Verdict::Fix(match_case(typed, word, false));
+        }
         let typed_chars: Vec<char> = lower.chars().collect();
         // One slip in a short word; two only in a long one, where few real
         // words sit that close ("gefixt" is not "Geist").
@@ -124,6 +127,14 @@ impl Corrector {
         } else {
             Verdict::Fix(fix)
         }
+    }
+
+    /// Whether `word` could be `typo` typed with a slip or two, not another
+    /// word written in its place.
+    pub(crate) fn slip(typo: &str, word: &str) -> bool {
+        let typo: Vec<char> = typo.to_lowercase().chars().collect();
+        let word: Vec<char> = word.to_lowercase().chars().collect();
+        typo != word && distance(&word, &typo, 2.0).is_some()
     }
 }
 
@@ -380,6 +391,22 @@ mod tests {
             corrector.correct("Hyprlnad", None, &learned),
             Verdict::Fix("Hyprland".into())
         );
+    }
+
+    #[test]
+    fn a_retyped_typo_is_fixed_as_you_retyped_it() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        assert_eq!(corrector.correct("realy", None, &learned), Verdict::Unknown);
+        learned.retyped("realy", "really");
+        learned.retyped("realy", "really");
+        assert_eq!(
+            corrector.correct("Realy", None, &learned),
+            Verdict::Fix("Really".into())
+        );
+        assert!(Corrector::slip("realy", "really"));
+        assert!(!Corrector::slip("hund", "katze"));
+        assert!(!Corrector::slip("Haus", "haus"));
     }
 
     #[test]
