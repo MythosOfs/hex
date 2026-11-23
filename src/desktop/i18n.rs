@@ -13,6 +13,7 @@ use strings::TRANSLATIONS;
 
 mod agents;
 mod annotate_dictation;
+mod autocorrect;
 mod calls;
 mod clock;
 mod failures;

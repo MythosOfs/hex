@@ -117,6 +117,9 @@ pub struct LabsSettings {
     /// Clear typos in typed text are fixed as each word ends, and your own
     /// words are learned (Linux Wayland, through an input method).
     pub autocorrect: bool,
+    /// With Autocorrect, Gemma 3 270M (downloaded once, run through the
+    /// system's llama.cpp) reads the sentence to choose fixes.
+    pub autocorrect_model: bool,
     pub live_chapters: bool,
     pub playground: bool,
     /// Names and terms shown in the focused window become temporary
@@ -482,6 +485,7 @@ impl Default for LabsSettings {
             failure_notices: false,
             live_typing: false,
             autocorrect: false,
+            autocorrect_model: false,
             live_chapters: false,
             playground: false,
             screen_vocabulary: false,

@@ -8,11 +8,13 @@
 //! Hex fixed or left that you deleted and typed again differently in the same
 //! place, and hands that pair to `Learned`.
 
-use super::correct::{Corrector, Verdict};
+use super::correct::{Corrector, Scorer, Verdict};
 use super::learned::Learned;
 
 /// Characters that finish a word and trigger its correction.
 const ENDINGS: &[char] = &[' ', ',', '.', '!', '?', ';', ':', ')'];
+/// About how much of the line before a word a language model reads.
+const CONTEXT_BYTES: usize = 300;
 
 /// Replace the `delete` bytes before the cursor with `insert`.
 #[derive(Debug, Eq, PartialEq)]
@@ -30,8 +32,8 @@ pub(crate) struct Field {
     expect: Option<String>,
     /// The fix just made, while Backspace may still take it back.
     last: Option<Applied>,
-    /// The last word Hex fixed or didn't know: retyped in its place, it
-    /// teaches a typo, and an unknown one waits for the next word.
+    /// The last word finished: retyped in its place, a fixed or unknown one
+    /// teaches a typo, and the next word may still change it.
     finished: Option<Finished>,
 }
 
@@ -48,8 +50,17 @@ struct Finished {
     /// The text before the word.
     prefix: String,
     typed: String,
-    /// Hex didn't know it and left it as typed.
-    unknown: bool,
+    verdict: Verdict,
+}
+
+impl Finished {
+    /// The word as the field shows it.
+    fn shown(&self) -> &str {
+        match &self.verdict {
+            Verdict::Fix(fix) => fix,
+            Verdict::Unknown | Verdict::Leave => &self.typed,
+        }
+    }
 }
 
 impl Field {
@@ -69,6 +80,7 @@ impl Field {
         before: Option<&str>,
         corrector: &Corrector,
         learned: &mut Learned,
+        mut scorer: Option<&mut dyn Scorer>,
     ) -> Option<Edit> {
         let Some(now) = before else {
             self.reset();
@@ -112,69 +124,127 @@ impl Field {
         let word = current_word(earlier)?;
         let prefix = &earlier[..earlier.len() - word.len()];
         let verdict = corrector.correct(word, previous_word(prefix), learned);
-        let word_fix = match &verdict {
+        let mut word_fix = match &verdict {
             Verdict::Fix(fix) => Some(fix.clone()),
             Verdict::Unknown | Verdict::Leave => None,
         };
-        // The word before, if it waited for this one and the pair decides it.
+        // The word before, when only a space separates it and this word
+        // decides it: the language model, else the word pairs for a word
+        // left unknown.
         let mut before_fix = None;
         if let Some(finished) = self.finished.take() {
             if finished.prefix == prefix {
-                if verdict == Verdict::Leave && Corrector::slip(&finished.typed, word) {
+                if verdict == Verdict::Leave
+                    && finished.verdict != Verdict::Leave
+                    && Corrector::slip(&finished.typed, word)
+                {
                     learned.retyped(&finished.typed, word);
                 }
-            } else if finished.unknown {
-                before_fix = (prefix == format!("{}{} ", finished.prefix, finished.typed))
-                    .then(|| {
-                        corrector.correct_before(
+            } else {
+                let unknown = finished.verdict == Verdict::Unknown;
+                if prefix == format!("{}{} ", finished.prefix, finished.shown()) {
+                    let next = word_fix.as_deref().unwrap_or(word);
+                    let previous = previous_word(&finished.prefix);
+                    let reviewed = scorer.as_deref_mut().and_then(|scorer| {
+                        corrector.review(
                             &finished.typed,
-                            previous_word(&finished.prefix),
-                            word_fix.as_deref().unwrap_or(word),
+                            previous,
+                            context(&finished.prefix),
+                            Some(next),
                             learned,
+                            scorer,
                         )
-                    })
-                    .flatten()
-                    .map(|fix| (fix, finished.prefix.clone(), finished.typed.clone()));
-                if before_fix.is_none() {
+                    });
+                    before_fix = reviewed
+                        .or_else(|| {
+                            unknown
+                                .then(|| {
+                                    corrector.correct_before(
+                                        &finished.typed,
+                                        previous,
+                                        next,
+                                        learned,
+                                    )
+                                })
+                                .flatten()
+                        })
+                        .filter(|fix| fix != finished.shown())
+                        .map(|fix| {
+                            (
+                                fix,
+                                finished.prefix.clone(),
+                                finished.typed.clone(),
+                                finished.shown().to_owned(),
+                            )
+                        });
+                }
+                if unknown && before_fix.is_none() {
                     learned.typed(&finished.typed);
                 }
             }
         }
         // `word_prefix` is the text before this word once the edit lands.
-        let (start, word_prefix, original, fix, changed) = match (before_fix, &word_fix) {
+        let word_prefix = match &before_fix {
+            Some((fix, start, ..)) => format!("{start}{fix} "),
+            None => prefix.to_owned(),
+        };
+        // No word follows across punctuation: the model decides this one now.
+        if ending != " "
+            && let Some(scorer) = scorer
+            && let Some(fix) = corrector.review(
+                word,
+                previous_word(&word_prefix),
+                context(&word_prefix),
+                None,
+                learned,
+                scorer,
+            )
+        {
+            word_fix = Some(fix);
+        }
+        let verdict = match &word_fix {
+            Some(fix) => Verdict::Fix(fix.clone()),
+            None => verdict,
+        };
+        // `shown` is what the field holds now, `original` what Backspace
+        // puts back.
+        let (start, shown, original, fix, changed) = match (before_fix, &word_fix) {
             (None, None) => {
-                if verdict == Verdict::Unknown {
-                    self.finished = Some(Finished {
-                        prefix: prefix.to_owned(),
-                        typed: word.to_owned(),
-                        unknown: true,
-                    });
-                }
+                self.finished = Some(Finished {
+                    prefix: word_prefix,
+                    typed: word.to_owned(),
+                    verdict,
+                });
                 return None;
             }
             (None, Some(fix)) => (
                 prefix.to_owned(),
-                prefix.to_owned(),
+                word.to_owned(),
                 word.to_owned(),
                 fix.clone(),
                 vec![word.to_owned()],
             ),
-            (Some((before, start, typed)), _) => {
+            (Some((before, start, typed, shown)), _) => {
                 let mut changed = vec![typed.clone()];
                 changed.extend(word_fix.is_some().then(|| word.to_owned()));
                 let fix = format!("{before} {}", word_fix.as_deref().unwrap_or(word));
-                let word_prefix = format!("{start}{before} ");
-                (start, word_prefix, format!("{typed} {word}"), fix, changed)
+                (
+                    start,
+                    format!("{shown} {word}"),
+                    format!("{typed} {word}"),
+                    fix,
+                    changed,
+                )
             }
         };
-        self.finished = (verdict != Verdict::Leave).then(|| Finished {
+        self.finished = Some(Finished {
             prefix: word_prefix,
             typed: word.to_owned(),
-            unknown: verdict == Verdict::Unknown,
+            verdict,
         });
         self.expect = Some(format!("{start}{fix}{ending}"));
         let edit = Edit {
-            delete: original.len() + ending.len(),
+            delete: shown.len() + ending.len(),
             insert: format!("{fix}{ending}"),
         };
         self.last = Some(Applied {
@@ -185,6 +255,19 @@ impl Field {
         });
         Some(edit)
     }
+}
+
+/// The text a language model reads before a word: the end of its line.
+fn context(prefix: &str) -> &str {
+    let line = prefix.rsplit('\n').next().unwrap_or(prefix).trim_end();
+    let mut start = line.len().saturating_sub(CONTEXT_BYTES);
+    while !line.is_char_boundary(start) {
+        start += 1;
+    }
+    if start > 0 {
+        start = line[start..].find(' ').map_or(start, |at| start + at + 1);
+    }
+    &line[start..]
 }
 
 /// The word that ends `before`, or None inside an address, path, handle, or
@@ -228,11 +311,11 @@ mod tests {
             } else {
                 text.push(c);
             }
-            if let Some(edit) = field.changed(Some(text), corrector, learned) {
+            if let Some(edit) = field.changed(Some(text), corrector, learned, None) {
                 text.truncate(text.len() - edit.delete);
                 text.push_str(&edit.insert);
                 assert_eq!(
-                    field.changed(Some(text), corrector, learned),
+                    field.changed(Some(text), corrector, learned, None),
                     None,
                     "the echo"
                 );
@@ -313,29 +396,83 @@ mod tests {
         assert!(learned.knows("realy") && learned.knows("goood"));
     }
 
+    /// A language model that likes only continuations starting with `liked`.
+    struct Fake(&'static [&'static str]);
+
+    impl Scorer for Fake {
+        fn score(&mut self, _: &str, continuation: &str) -> Option<f32> {
+            let first = continuation.split(' ').next()?.to_lowercase();
+            Some(if self.0.contains(&first.as_str()) {
+                0.0
+            } else {
+                20.0
+            })
+        }
+    }
+
+    #[test]
+    fn a_language_model_fixes_real_words_once_the_next_word_is_typed() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        let mut field = Field::default();
+        let mut scorer = Fake(&["ein", "cat"]);
+        let mut text = String::new();
+        let mut type_into = |text: &mut String, typed: &str| {
+            for c in typed.chars() {
+                if c == '\u{8}' {
+                    text.pop();
+                } else {
+                    text.push(c);
+                }
+                if let Some(edit) =
+                    field.changed(Some(text), &corrector, &mut learned, Some(&mut scorer))
+                {
+                    text.truncate(text.len() - edit.delete);
+                    text.push_str(&edit.insert);
+                    assert_eq!(
+                        field.changed(Some(text), &corrector, &mut learned, Some(&mut scorer)),
+                        None
+                    );
+                }
+            }
+        };
+        type_into(&mut text, "The car ");
+        assert_eq!(text, "The car ", "a real word waits");
+        type_into(&mut text, "purrs ");
+        assert_eq!(text, "The cat purrs ");
+        type_into(&mut text, "\u{8}");
+        assert_eq!(text, "The car purrs", "taken back");
+        type_into(&mut text, ". Das ist eim.");
+        assert_eq!(text, "The car purrs. Das ist ein.", "decided at once");
+        assert!(learned.knows("car"));
+    }
+
     #[test]
     fn pastes_jumps_and_glued_tokens_are_left_alone() {
         let corrector = Corrector::built_in();
         let mut learned = Learned::default();
         let mut field = Field::default();
-        assert_eq!(field.changed(Some("x"), &corrector, &mut learned), None);
         assert_eq!(
-            field.changed(Some("x teh "), &corrector, &mut learned),
+            field.changed(Some("x"), &corrector, &mut learned, None),
+            None
+        );
+        assert_eq!(
+            field.changed(Some("x teh "), &corrector, &mut learned, None),
             None,
             "a paste"
         );
         assert_eq!(
-            field.changed(Some("see ~/teh"), &corrector, &mut learned),
+            field.changed(Some("see ~/teh"), &corrector, &mut learned, None),
             None
         );
         assert_eq!(
-            field.changed(Some("see ~/teh "), &corrector, &mut learned),
+            field.changed(Some("see ~/teh "), &corrector, &mut learned, None),
             None,
             "a path"
         );
-        assert_eq!(field.changed(None, &corrector, &mut learned), None);
+        assert_eq!(field.changed(None, &corrector, &mut learned, None), None);
         assert_eq!(
-            field.changed(Some("teh "), &corrector, &mut learned),
+            field.changed(Some("teh "), &corrector, &mut learned, None),
             None,
             "after a selection"
         );

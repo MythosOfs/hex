@@ -16,6 +16,7 @@ impl Feature {
             Self::FailureNotices => "Failure notices",
             Self::LiveTyping => "Live typing",
             Self::Autocorrect => "Autocorrect",
+            Self::AutocorrectModel => "Smarter autocorrect",
             Self::LiveChapters => "Live chapters",
             Self::ScreenVocabulary => "Words on screen",
             Self::LearnFromCorrections => "Learn from corrections",
@@ -126,6 +127,9 @@ impl Feature {
             }
             Self::Autocorrect => {
                 "On Wayland, fix clear typos as you finish each word, in German and English at once. Backspace right after a fix undoes it, and Hex learns the word"
+            }
+            Self::AutocorrectModel => {
+                "With Autocorrect on, a small language model reads the sentence to choose fixes, and catches real words typed for others. Downloads Gemma 3 270M (290 MB) and needs llama.cpp installed"
             }
             Self::TerminalPaste => "Paste with Ctrl+Shift+V so terminals accept it",
             Self::KeyboardModelSwitching => {

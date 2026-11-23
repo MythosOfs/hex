@@ -36,6 +36,13 @@ pub fn autocorrect() -> bool {
     feature_on(Feature::Autocorrect)
 }
 
+/// Smarter autocorrect: Gemma 3 270M scores the readings
+/// (Linux; read by the autocorrect thread every half second).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn autocorrect_model() -> bool {
+    feature_on(Feature::AutocorrectModel)
+}
+
 /// Live chapters while a meeting records.
 pub fn live_chapters() -> bool {
     feature_on(Feature::LiveChapters)

@@ -360,6 +360,11 @@ pub(super) const KEYS: &[Key] = &[
         "Labs: fix clear typos in German and English as you finish each word you type, learning your own words; Backspace right after a fix undoes it (Linux Wayland)",
     ),
     key(
+        "labs.autocorrect_model",
+        Kind::Bool,
+        "Labs: with Autocorrect on, a small language model (Gemma 3 270M, a 290 MB download, run through the system's llama.cpp) reads the sentence to choose fixes, including real words typed for others (Linux Wayland)",
+    ),
+    key(
         "labs.live_chapters",
         Kind::Bool,
         "Labs: chapter meeting transcripts while recording",

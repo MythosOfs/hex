@@ -83,6 +83,15 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        input methods (Fcitx5, IBus) get it unavailable. Apps need text-input-v3 surrounding text
 │                                        (GTK, Qt, Firefox; Chromium/Electron with --enable-wayland-ime)
 │                                        // checks: linux::autocorrect (field, correct, learned, model); live_compositor (ignored, needs a compositor)
+├── Smarter autocorrect  no  labs.autocorrect_model  (Dev, Linux Wayland, with Autocorrect on) Gemma 3 270M, downloaded
+│                                        once (290 MB, pinned SHA-256, `models/autocorrect/`), scored through the system's llama.cpp
+│                                        (`libllama.so.1`, loaded at run time; missing, the lab only logs why). Each word is
+│                                        reviewed once the next word is typed (before punctuation at once): its readings and the
+│                                        word as typed, scored as slip nats × 1.5 plus the model's nats for "word next"; a fix
+│                                        must win by 1 nat over the next reading and 4 over the typed word (6 for a real word).
+│                                        Replaces the word pairs' pass while loaded. Generated typos (822): 64% → 79% fixed right,
+│                                        wrong 23 → 29, correct words changed unchanged; ~15 ms per word on a GPU, ~290 MB
+│                                        // checks: linux::autocorrect (field's fake-model test); language_model scores_like_the_experiment (ignored, downloads the model)
 ├── Appearance      no    labs.appearance + labs.appearance_theme (system/light/dark, default system)  the main window is forced light or dark instead of following the system; the dictation HUD (including its onboarding and Sounds previews) and meeting recording pill remain dark. Other overlays follow the OS. On Windows the title bar follows too, through its background and light/dark mode; Windows 10 has no caption colour, so DWM keeps its own light or dark caption background (builds before 19041 keep the OS caption) while its text and buttons follow
 ├── Live chapters   no    labs.live_chapters                     chapters a meeting while it records, boundary pass after Stop
 ├── Words on screen no labs.screen_vocabulary         (macOS)   names and terms in the focused window become temporary vocabulary for each dictation; read locally through Accessibility, never saved, password fields skipped

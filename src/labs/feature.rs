@@ -153,6 +153,7 @@ define_features! {
     ScreenVocabulary => labs(screen_vocabulary), "screen-vocabulary", Dictation, Everyone, MACOS, 20261112;
     LearnFromCorrections => labs(learn_from_corrections), "learn-from-corrections", Dictation, Everyone, MACOS, 20261121;
     Autocorrect => labs(autocorrect), "autocorrect", Output, Everyone, LINUX, 20261123;
+    AutocorrectModel => labs(autocorrect_model), "autocorrect-model", Output, Dev, LINUX, 20261123;
     TerminalPaste => app(paste_with_shift), "terminal-paste", Output, Everyone, WINDOWS, 20261030;
     KeyboardModelSwitching => app(keyboard_model_switching.enabled), "keyboard-model-switching", Models, Everyone, EVERY, 20261030;
     MouseShortcuts => labs(mouse_shortcuts), "mouse-shortcuts", Shortcuts, Everyone, MACOS, 20261030;

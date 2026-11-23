@@ -23,6 +23,15 @@ The English validity list also uses SCOWL 2020.12.07 (sizes through 70), by
 Kevin Atkinson and contributors (https://wordlist.aspell.net/). Its permission
 and source notices are in `android/app/src/main/assets/licenses/scowl.txt`.
 
+## Gemma 3 270M (Linux autocorrect)
+
+Labs › Smarter autocorrect downloads `gemma-3-270m-Q8_0.gguf`
+from https://huggingface.co/ggml-org/gemma-3-270m-GGUF (Google's Gemma 3
+270M, GGUF conversion by ggml-org); Hex does not ship it. Gemma is provided
+under and subject to the Gemma Terms of Use found at
+https://ai.google.dev/gemma/terms, including the Gemma Prohibited Use Policy
+(https://ai.google.dev/gemma/prohibited_use_policy).
+
 ## Parakeet Ultra
 
 Parakeet Ultra by Moondream, based on NVIDIA Parakeet TDT 0.6B v3. GGUF

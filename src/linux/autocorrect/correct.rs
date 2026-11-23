@@ -21,6 +21,17 @@ const LEARNED_NATS: f32 = 9.0;
 const MAX_LENGTH: usize = 32;
 /// The next word's cost under a reading whose language doesn't know it.
 const FOREIGN_NEXT_NATS: f32 = 0.92 + 255.0 * 0.125;
+/// With a language model (`review`): slip nats count this much against its
+/// nats, the best reading must beat the next by `REVIEW_MARGIN`, and the word
+/// as typed by `REVIEW_UNKNOWN` (`REVIEW_REAL` when it is a real word).
+/// Tuned on generated typos (`scripts/autocorrect-lm` on the experiment
+/// branch).
+const REVIEW_SLIP_WEIGHT: f32 = 1.5;
+const REVIEW_MARGIN: f32 = 1.0;
+const REVIEW_UNKNOWN: f32 = 4.0;
+const REVIEW_REAL: f32 = 6.0;
+/// Readings a language model scores, besides the word as typed.
+const REVIEW_READINGS: usize = 5;
 
 /// Short words, names, and abbreviations people type on purpose.
 const SHORTHAND: &[&str] = &[
@@ -50,6 +61,13 @@ struct Reading {
     capital: bool,
     /// The model and its word, None for a word you taught.
     word: Option<(usize, u32)>,
+    /// The slips' share of `score`.
+    edits: f32,
+}
+
+/// How unlikely `continuation` is after `context`, in nats.
+pub(crate) trait Scorer {
+    fn score(&mut self, context: &str, continuation: &str) -> Option<f32>;
 }
 
 impl Corrector {
@@ -138,6 +156,61 @@ impl Corrector {
         (fix != typed).then_some(fix)
     }
 
+    /// The fix a language model picks for `typed`, which followed `context`
+    /// and is followed by `next` (None at a sentence's end), whatever the
+    /// word pairs made of it. It also catches a real word typed for another
+    /// ("eim" for "ein" is a typo, "in" for "ein" only the model sees).
+    pub(crate) fn review(
+        &self,
+        typed: &str,
+        previous: Option<&str>,
+        context: &str,
+        next: Option<&str>,
+        learned: &Learned,
+        scorer: &mut dyn Scorer,
+    ) -> Option<String> {
+        let lower = typed.to_lowercase();
+        if !(3..=MAX_LENGTH).contains(&typed.chars().count())
+            || !typed.chars().all(char::is_alphabetic)
+            || typed.chars().skip(1).any(char::is_uppercase)
+            || SHORTHAND.contains(&lower.as_str())
+            || learned.knows(&lower)
+            || learned.typo(&lower).is_some()
+        {
+            return None;
+        }
+        let mut readings = self.readings(&lower, previous, learned);
+        readings.sort_by(|a, b| a.score.total_cmp(&b.score));
+        let mut seen = std::collections::HashSet::new();
+        readings.retain(|reading| seen.insert(reading.text.to_lowercase()));
+        readings.truncate(REVIEW_READINGS);
+        if readings.is_empty() {
+            return None;
+        }
+        // The word as typed competes, so a rare word you meant stays.
+        let mut options: Vec<(&str, f32, bool)> = readings
+            .iter()
+            .map(|reading| (reading.text.as_str(), reading.edits, reading.capital))
+            .collect();
+        if !options.iter().any(|o| o.0.to_lowercase() == lower) {
+            options.push((&lower, 0.0, false));
+        }
+        let mut scored = Vec::new();
+        for (text, edits, capital) in options {
+            let word = match_case(typed, text, false);
+            let continuation = next.map_or(word.clone(), |next| format!("{word} {next}"));
+            let nats = scorer.score(context, &continuation)?;
+            scored.push((REVIEW_SLIP_WEIGHT * edits + nats, text, capital));
+        }
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (best, text, capital) = scored[0];
+        let own = scored.iter().find(|o| o.1.to_lowercase() == lower)?.0;
+        let known = self.models.iter().any(|model| model.knows(&lower));
+        let clear = scored.get(1).is_none_or(|o| o.0 - best >= REVIEW_MARGIN)
+            && own - best >= if known { REVIEW_REAL } else { REVIEW_UNKNOWN };
+        (clear && text.to_lowercase() != lower).then(|| match_case(typed, text, capital))
+    }
+
     /// Every reading of `lower` within its slip budget, scored.
     fn readings(&self, lower: &str, previous: Option<&str>, learned: &Learned) -> Vec<Reading> {
         let typed_chars: Vec<char> = lower.chars().collect();
@@ -159,6 +232,7 @@ impl Corrector {
                     capital: model.capital_share(&text).is_some_and(|share| share >= 95),
                     text,
                     word: Some((index, word)),
+                    edits: edits * EDIT_NATS,
                 });
             }
         }
@@ -170,6 +244,7 @@ impl Corrector {
                     score: edits * EDIT_NATS + LEARNED_NATS,
                     capital: false,
                     word: None,
+                    edits: edits * EDIT_NATS,
                 });
             }
         }

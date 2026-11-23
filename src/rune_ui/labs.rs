@@ -631,6 +631,7 @@ fn rows(ui: &Ui) -> Vec<Row> {
             },
             ..autocorrect
         });
+        rows.push(row(Feature::AutocorrectModel, Some(&KEYBOARD)));
     }
     rows.push(row(Feature::Appearance, Some(&PANEL)));
     if caps.meetings {
@@ -964,6 +965,7 @@ fn row_key(lab: Lab) -> &'static str {
         Feature::FailureNotices => "lab-failure-notices",
         Feature::LiveTyping => "lab-live-typing",
         Feature::Autocorrect => "lab-autocorrect",
+        Feature::AutocorrectModel => "lab-autocorrect-model",
         Feature::LiveChapters => "lab-live-chapters",
         Feature::ScreenVocabulary => "lab-screen-vocabulary",
         Feature::LearnFromCorrections => "lab-learn-from-corrections",

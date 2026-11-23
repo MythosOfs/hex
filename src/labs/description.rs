@@ -35,6 +35,9 @@ impl Feature {
             Self::Autocorrect => {
                 "On Wayland, fix clear typos in German and English as you finish each word you type; Backspace right after a fix undoes it, and Hex learns your own words"
             }
+            Self::AutocorrectModel => {
+                "With Autocorrect on, Gemma 3 270M (downloaded once, 290 MB) reads the sentence through the system's llama.cpp to choose between a typo's readings and to catch real words typed for others"
+            }
             Self::TerminalPaste => "Paste with Ctrl+Shift+V, for apps that ignore Ctrl+V",
             Self::KeyboardModelSwitching => {
                 "Changing the keyboard language switches to the speech model you picked for it"

@@ -51,7 +51,8 @@ macOS), Share dictation shortcut (#176, Windows), Free memory when idle
 (#442), Smaller model files (macOS), Terminal paste (Windows), Terminal
 paste shortcut (Windows, Linux), Stop phrase, Signature, Hold through other keys
 (macOS and Windows), Microphone key alone (#181, macOS), Autocorrect (#2368,
-Linux Wayland), and Dictate while annotating.
+Linux Wayland), Smarter autocorrect (Dev, Linux Wayland, a language model), and
+Dictate while annotating.
 Externally contributed features land there too.
 Every `Everyone` lab also gets a page on Hex's website,
 `anoma.ly/hex/labs/<id>` (index at `/hex/labs`), built from
@@ -383,6 +384,13 @@ substitute for source inspection or a second roadmap.
   and a word typed one key over is read back). Backspace right after a fix
   restores the typed word and learns it; a typo you delete and retype the
   same way twice becomes a fix. Learned words and typos live owner-only in `autocorrect.json`.
+  With Labs › Smarter autocorrect (Dev) also on,
+  `autocorrect/language_model` downloads Gemma 3 270M once (pinned size and
+  SHA-256, `models/autocorrect/`) and scores through the system's llama.cpp,
+  `dlopen`ed (`libllama.so.1`; Hex never links it, and without it the lab
+  only logs why). It reviews each word once the next one is typed (at once
+  before punctuation), real words included, and replaces the word pairs'
+  pass; it never runs for learned words or fields autocorrect skips.
 - `linux/clipboard`: the clipboard a Linux paste restores: every format of the
   CLIPBOARD selection read within a size cap and deadline, then served again
   from Hex (ext-data-control, else wlr-data-control on Wayland, its own selection owner with INCR on

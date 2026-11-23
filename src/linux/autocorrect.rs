@@ -14,12 +14,14 @@
 
 mod correct;
 mod field;
+mod language_model;
 mod learned;
 mod model;
 
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,6 +35,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
 
 use self::correct::Corrector;
 use self::field::Field;
+use self::language_model::LanguageModel;
 use self::learned::Learned;
 use crate::linux::live_typing::protocol::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use crate::linux::live_typing::protocol::zwp_input_method_v2::{
@@ -66,10 +69,21 @@ fn run(shutdown: &'static AtomicBool) {
     let mut owner: Option<Owner> = None;
     let mut retry_at = Instant::now();
     let mut saved_at = Instant::now();
+    let language = Arc::new(Mutex::new(None));
+    // Set while the model downloads or loads; cleared to stop a download.
+    let mut loading: Option<Arc<AtomicBool>> = None;
     while !shutdown.load(Ordering::Acquire) {
         let on = crate::labs::autocorrect();
+        let wants_model = on && crate::labs::autocorrect_model();
+        if wants_model && loading.is_none() {
+            loading = Some(load_language_model(&language));
+        }
+        if !wants_model && let Some(canceled) = loading.take() {
+            canceled.store(true, Ordering::Release);
+            *language.lock().unwrap() = None;
+        }
         if on && owner.is_none() && Instant::now() >= retry_at {
-            match Owner::connect(path.clone()) {
+            match Owner::connect(path.clone(), language.clone()) {
                 Ok(connected) => owner = Some(connected),
                 Err(error) => {
                     tracing::info!(%error, "autocorrect could not become the input method");
@@ -106,6 +120,35 @@ fn run(shutdown: &'static AtomicBool) {
     if let Some(mut ended) = owner {
         ended.end();
     }
+    if let Some(canceled) = loading {
+        canceled.store(true, Ordering::Release);
+    }
+    *language.lock().unwrap() = None;
+}
+
+/// Downloads and loads the language model on its own thread into
+/// `language`; the flag it returns stops it. A failure is logged and not
+/// retried until the lab is turned off and on.
+fn load_language_model(language: &Arc<Mutex<Option<LanguageModel>>>) -> Arc<AtomicBool> {
+    let canceled = Arc::new(AtomicBool::new(false));
+    let (language, flag) = (language.clone(), canceled.clone());
+    let spawned = thread::Builder::new()
+        .name("hex-autocorrect-model".into())
+        .spawn(move || {
+            let loaded = language_model::fetch(&flag).and_then(|path| LanguageModel::load(&path));
+            match loaded {
+                Ok(model) if !flag.load(Ordering::Acquire) => {
+                    tracing::info!("autocorrect's language model is loaded");
+                    *language.lock().unwrap() = Some(model);
+                }
+                Ok(_) => {}
+                Err(error) => tracing::info!(%error, "autocorrect's language model is unavailable"),
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::info!(%error, "autocorrect's language model is unavailable");
+    }
+    canceled
 }
 
 struct Owner {
@@ -118,7 +161,7 @@ struct Owner {
 }
 
 impl Owner {
-    fn connect(path: Option<PathBuf>) -> Result<Self> {
+    fn connect(path: Option<PathBuf>, language: Arc<Mutex<Option<LanguageModel>>>) -> Result<Self> {
         let connection =
             Connection::connect_to_env().wrap_err("there is no Wayland display to reach")?;
         let (globals, mut queue) = registry_queue_init::<State>(&connection)
@@ -132,7 +175,7 @@ impl Owner {
             .wrap_err("this compositor offers no zwp_input_method_manager_v2")?;
         let method = manager.get_input_method(&seat, &handle, ());
         let learned = path.as_deref().map(Learned::load).unwrap_or_default();
-        let mut state = State::new(Corrector::built_in(), learned);
+        let mut state = State::new(Corrector::built_in(), learned, language);
         queue
             .roundtrip(&mut state)
             .wrap_err("the compositor did not answer")?;
@@ -238,10 +281,16 @@ struct State {
     /// The fix a `done` asked for, with the text before the cursor it was
     /// made for, until it is sent.
     pending_edit: Option<(field::Edit, String)>,
+    /// Labs › Smarter autocorrect, once loaded.
+    language: Arc<Mutex<Option<LanguageModel>>>,
 }
 
 impl State {
-    fn new(corrector: Corrector, learned: Learned) -> Self {
+    fn new(
+        corrector: Corrector,
+        learned: Learned,
+        language: Arc<Mutex<Option<LanguageModel>>>,
+    ) -> Self {
         Self {
             corrector,
             learned,
@@ -255,6 +304,7 @@ impl State {
             pending_content: None,
             dirty: false,
             pending_edit: None,
+            language,
         }
     }
 
@@ -279,9 +329,13 @@ impl State {
         let before =
             (cursor == anchor as usize && text.is_char_boundary(cursor)).then(|| &text[..cursor]);
         let generation = self.learned.generation();
+        let mut language = self.language.lock().unwrap();
+        let scorer = language
+            .as_mut()
+            .map(|model| model as &mut dyn correct::Scorer);
         let edit = self
             .field
-            .changed(before, &self.corrector, &mut self.learned);
+            .changed(before, &self.corrector, &mut self.learned, scorer);
         self.dirty |= generation != self.learned.generation();
         edit
     }
@@ -396,7 +450,7 @@ mod tests {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(10);
-        let mut owner = Owner::connect(None).unwrap();
+        let mut owner = Owner::connect(None, Arc::default()).unwrap();
         let end = Instant::now() + Duration::from_secs(seconds);
         while Instant::now() < end {
             owner.pump(TICK).unwrap();
@@ -410,7 +464,7 @@ mod tests {
 
     #[test]
     fn a_done_applies_activation_and_fixes_the_finished_word() {
-        let mut state = State::new(Corrector::built_in(), Learned::default());
+        let mut state = State::new(Corrector::built_in(), Learned::default(), Arc::default());
         state.pending_text = Some(("teh".into(), 3, 3));
         assert_eq!(state.done(), None, "inactive");
         state.pending_active = Some(true);
