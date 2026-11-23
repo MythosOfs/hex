@@ -29,6 +29,13 @@ pub fn live_typing() -> bool {
     feature_on(Feature::LiveTyping)
 }
 
+/// Autocorrect: fix clear typos in typed text through a Wayland input
+/// method and learn your words (Linux; read by its thread every half second).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn autocorrect() -> bool {
+    feature_on(Feature::Autocorrect)
+}
+
 /// Live chapters while a meeting records.
 pub fn live_chapters() -> bool {
     feature_on(Feature::LiveChapters)

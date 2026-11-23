@@ -123,6 +123,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
       ../skills
       # The iOS cleaner's instructions, compared by a test.
       ../ios/HEXMobile/TranscriptCleanup.swift
+      # The phone keyboards' German and English word lists Labs › Autocorrect builds in.
+      ../android/app/src/main/assets/typing
       # The Labs registry's published copy: a Rust test compares it to the registry.
       ../site/src/labs.json
       ../macos/HexMicrophoneDriver/Info.plist

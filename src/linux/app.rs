@@ -502,6 +502,7 @@ pub(crate) fn run(
     let tray =
         crate::linux::tray::start(host.clone(), published.clone(), control.clone(), shutdown)
             .map(Arc::new);
+    crate::linux::autocorrect::start(shutdown);
     linux_service::notify("READY=1");
     tracing::info!(pid = std::process::id(), "Hex instance ready");
 

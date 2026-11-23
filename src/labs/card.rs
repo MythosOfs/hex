@@ -15,6 +15,7 @@ impl Feature {
             Self::FasterLiveText => "Faster live text",
             Self::FailureNotices => "Failure notices",
             Self::LiveTyping => "Live typing",
+            Self::Autocorrect => "Autocorrect",
             Self::LiveChapters => "Live chapters",
             Self::ScreenVocabulary => "Words on screen",
             Self::LearnFromCorrections => "Learn from corrections",
@@ -122,6 +123,9 @@ impl Feature {
             }
             Self::LearnFromCorrections => {
                 "When you fix a name in text Hex just pasted, Hex adds the corrected spelling to Vocabulary. It watches only that field, for up to 5 minutes, and never sends it anywhere."
+            }
+            Self::Autocorrect => {
+                "On Wayland, fix clear typos as you finish each word, in German and English at once. Backspace right after a fix undoes it, and Hex learns the word"
             }
             Self::TerminalPaste => "Paste with Ctrl+Shift+V so terminals accept it",
             Self::KeyboardModelSwitching => {
