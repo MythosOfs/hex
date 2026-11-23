@@ -379,9 +379,10 @@ substitute for source inspection or a second roadmap.
   before the cursor that the focused field reports, and replaces a clear typo
   when a word-ending character follows it (the phone keyboards' German and
   English models from `android/app/src/main/assets/typing`, searched at once
-  by weighted edit distance). Backspace right after a fix restores the typed
-  word and learns it; a typo you delete and retype the same way twice becomes a
-  fix. Learned words and typos live owner-only in `autocorrect.json`.
+  by weighted edit distance; a close call waits for the next word's pairs,
+  and a word typed one key over is read back). Backspace right after a fix
+  restores the typed word and learns it; a typo you delete and retype the
+  same way twice becomes a fix. Learned words and typos live owner-only in `autocorrect.json`.
 - `linux/clipboard`: the clipboard a Linux paste restores: every format of the
   CLIPBOARD selection read within a size cap and deadline, then served again
   from Hex (ext-data-control, else wlr-data-control on Wayland, its own selection owner with INCR on

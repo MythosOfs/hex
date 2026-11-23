@@ -3,8 +3,10 @@
 //! acts on exactly two edits: one word-ending character typed after a word
 //! (fix the word), and Backspace right after a fix (put the typed word back
 //! and learn it). Anything else (a paste, a jump, a selection) only moves on.
-//! It also notices a word Hex fixed or left that you deleted and typed again
-//! differently in the same place, and hands that pair to `Learned`.
+//! A word too close to call waits: once the next word is finished, the word
+//! pairs decide it and both are replaced in one edit. It also notices a word
+//! Hex fixed or left that you deleted and typed again differently in the same
+//! place, and hands that pair to `Learned`.
 
 use super::correct::{Corrector, Verdict};
 use super::learned::Learned;
@@ -28,16 +30,26 @@ pub(crate) struct Field {
     expect: Option<String>,
     /// The fix just made, while Backspace may still take it back.
     last: Option<Applied>,
-    /// The last word Hex fixed or didn't know, as you typed it, and the text
-    /// before it: retyped in that place, it teaches a typo.
-    finished: Option<(String, String)>,
+    /// The last word Hex fixed or didn't know: retyped in its place, it
+    /// teaches a typo, and an unknown one waits for the next word.
+    finished: Option<Finished>,
 }
 
 struct Applied {
     original: String,
     fix: String,
+    /// The text before the words.
+    prefix: String,
+    /// The typed words the fix changed, yours once you take it back.
+    changed: Vec<String>,
+}
+
+struct Finished {
     /// The text before the word.
     prefix: String,
+    typed: String,
+    /// Hex didn't know it and left it as typed.
+    unknown: bool,
 }
 
 impl Field {
@@ -82,7 +94,9 @@ impl Field {
         if let Some(applied) = self.last.take()
             && now.strip_prefix(applied.prefix.as_str()) == Some(applied.fix.as_str())
         {
-            learned.keep(&applied.original);
+            for word in &applied.changed {
+                learned.keep(word);
+            }
             self.expect = Some(format!("{}{}", applied.prefix, applied.original));
             return Some(Edit {
                 delete: applied.fix.len(),
@@ -98,34 +112,78 @@ impl Field {
         let word = current_word(earlier)?;
         let prefix = &earlier[..earlier.len() - word.len()];
         let verdict = corrector.correct(word, previous_word(prefix), learned);
-        if let Some((before, typo)) = self.finished.take()
-            && verdict == Verdict::Leave
-            && before == prefix
-            && Corrector::slip(&typo, word)
-        {
-            learned.retyped(&typo, word);
-        }
-        match verdict {
-            Verdict::Fix(fix) => {
-                self.finished = Some((prefix.to_owned(), word.to_owned()));
-                self.expect = Some(format!("{prefix}{fix}{ending}"));
-                self.last = Some(Applied {
-                    original: word.to_owned(),
-                    fix: fix.clone(),
-                    prefix: prefix.to_owned(),
-                });
-                Some(Edit {
-                    delete: word.len() + ending.len(),
-                    insert: format!("{fix}{ending}"),
-                })
+        let word_fix = match &verdict {
+            Verdict::Fix(fix) => Some(fix.clone()),
+            Verdict::Unknown | Verdict::Leave => None,
+        };
+        // The word before, if it waited for this one and the pair decides it.
+        let mut before_fix = None;
+        if let Some(finished) = self.finished.take() {
+            if finished.prefix == prefix {
+                if verdict == Verdict::Leave && Corrector::slip(&finished.typed, word) {
+                    learned.retyped(&finished.typed, word);
+                }
+            } else if finished.unknown {
+                before_fix = (prefix == format!("{}{} ", finished.prefix, finished.typed))
+                    .then(|| {
+                        corrector.correct_before(
+                            &finished.typed,
+                            previous_word(&finished.prefix),
+                            word_fix.as_deref().unwrap_or(word),
+                            learned,
+                        )
+                    })
+                    .flatten()
+                    .map(|fix| (fix, finished.prefix.clone(), finished.typed.clone()));
+                if before_fix.is_none() {
+                    learned.typed(&finished.typed);
+                }
             }
-            Verdict::Unknown => {
-                self.finished = Some((prefix.to_owned(), word.to_owned()));
-                learned.typed(word);
-                None
-            }
-            Verdict::Leave => None,
         }
+        // `word_prefix` is the text before this word once the edit lands.
+        let (start, word_prefix, original, fix, changed) = match (before_fix, &word_fix) {
+            (None, None) => {
+                if verdict == Verdict::Unknown {
+                    self.finished = Some(Finished {
+                        prefix: prefix.to_owned(),
+                        typed: word.to_owned(),
+                        unknown: true,
+                    });
+                }
+                return None;
+            }
+            (None, Some(fix)) => (
+                prefix.to_owned(),
+                prefix.to_owned(),
+                word.to_owned(),
+                fix.clone(),
+                vec![word.to_owned()],
+            ),
+            (Some((before, start, typed)), _) => {
+                let mut changed = vec![typed.clone()];
+                changed.extend(word_fix.is_some().then(|| word.to_owned()));
+                let fix = format!("{before} {}", word_fix.as_deref().unwrap_or(word));
+                let word_prefix = format!("{start}{before} ");
+                (start, word_prefix, format!("{typed} {word}"), fix, changed)
+            }
+        };
+        self.finished = (verdict != Verdict::Leave).then(|| Finished {
+            prefix: word_prefix,
+            typed: word.to_owned(),
+            unknown: verdict == Verdict::Unknown,
+        });
+        self.expect = Some(format!("{start}{fix}{ending}"));
+        let edit = Edit {
+            delete: original.len() + ending.len(),
+            insert: format!("{fix}{ending}"),
+        };
+        self.last = Some(Applied {
+            original,
+            fix,
+            prefix: start,
+            changed,
+        });
+        Some(edit)
     }
 }
 
@@ -227,6 +285,35 @@ mod tests {
     }
 
     #[test]
+    fn a_close_call_is_fixed_once_the_next_word_decides_it() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        let mut field = Field::default();
+        let mut text = String::new();
+        type_into(&mut field, &corrector, &mut learned, &mut text, "Realy ");
+        assert_eq!(text, "Realy ");
+        type_into(
+            &mut field,
+            &corrector,
+            &mut learned,
+            &mut text,
+            "good jsööp ",
+        );
+        assert_eq!(text, "Really good hallo ");
+        type_into(
+            &mut field,
+            &corrector,
+            &mut learned,
+            &mut text,
+            "realy goood ",
+        );
+        assert_eq!(text, "Really good hallo really good ", "both in one edit");
+        type_into(&mut field, &corrector, &mut learned, &mut text, "\u{8}");
+        assert_eq!(text, "Really good hallo realy goood", "and both taken back");
+        assert!(learned.knows("realy") && learned.knows("goood"));
+    }
+
+    #[test]
     fn pastes_jumps_and_glued_tokens_are_left_alone() {
         let corrector = Corrector::built_in();
         let mut learned = Learned::default();
@@ -267,6 +354,11 @@ mod tests {
             &mut text,
             "qzxjv qzxjv ",
         );
+        assert!(
+            !learned.knows("qzxjv"),
+            "the second waits for the next word"
+        );
+        type_into(&mut field, &corrector, &mut learned, &mut text, "und ");
         assert!(learned.knows("qzxjv"));
     }
 

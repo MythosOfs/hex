@@ -3,7 +3,9 @@
 //! neighbouring key, a doubled or swapped letter, or a missing accent costs
 //! less than any other slip. Every language's model is searched at once (its
 //! sorted spellings walked as a trie), so German and English mix in one
-//! sentence, and a word any of them knows is never touched.
+//! sentence, and a word any of them knows is never touched. A word too close
+//! to call waits for the next one, whose word pairs then decide it, and a word
+//! typed with the whole hand one key over (`jsööp`) is read back.
 
 use super::learned::Learned;
 use super::model::Model;
@@ -17,6 +19,8 @@ const MAX_SCORE: f32 = 22.0;
 /// A word you taught Hex counts as a moderately common one.
 const LEARNED_NATS: f32 = 9.0;
 const MAX_LENGTH: usize = 32;
+/// The next word's cost under a reading whose language doesn't know it.
+const FOREIGN_NEXT_NATS: f32 = 0.92 + 255.0 * 0.125;
 
 /// Short words, names, and abbreviations people type on purpose.
 const SHORTHAND: &[&str] = &[
@@ -44,6 +48,8 @@ struct Reading {
     text: String,
     score: f32,
     capital: bool,
+    /// The model and its word, None for a word you taught.
+    word: Option<(usize, u32)>,
 }
 
 impl Corrector {
@@ -78,17 +84,72 @@ impl Corrector {
         if let Some(word) = learned.typo(&lower) {
             return Verdict::Fix(match_case(typed, word, false));
         }
+        let readings = self.readings(&lower, previous, learned);
+        if readings.is_empty() {
+            return self
+                .shifted(&lower, learned)
+                .map_or(Verdict::Unknown, |(text, capital)| {
+                    Verdict::Fix(match_case(typed, &text, capital))
+                });
+        }
+        match pick(&readings, |reading| reading.score) {
+            Some(best) => {
+                let fix = match_case(typed, &best.text, best.capital);
+                if fix == typed {
+                    Verdict::Leave
+                } else {
+                    Verdict::Fix(fix)
+                }
+            }
+            None => Verdict::Unknown,
+        }
+    }
+
+    /// The fix for `typed`, left `Unknown` before, now that `next` follows
+    /// it: the word pairs into `next` decide between its close readings.
+    pub(crate) fn correct_before(
+        &self,
+        typed: &str,
+        previous: Option<&str>,
+        next: &str,
+        learned: &Learned,
+    ) -> Option<String> {
+        let next = next.to_lowercase();
+        let nexts: Vec<Option<u32>> = self.models.iter().map(|m| m.index(&next)).collect();
+        // A next word no language knows says nothing.
+        let backoff = self
+            .models
+            .iter()
+            .zip(&nexts)
+            .filter_map(|(model, next)| next.map(|next| model.cost(next, None)))
+            .reduce(f32::min)?;
+        let readings = self.readings(&typed.to_lowercase(), previous, learned);
+        let best = pick(&readings, |reading| {
+            reading.score
+                + match reading.word {
+                    Some((model, word)) => nexts[model].map_or(FOREIGN_NEXT_NATS, |next| {
+                        self.models[model].cost(next, Some(word))
+                    }),
+                    None => backoff,
+                }
+        })?;
+        let fix = match_case(typed, &best.text, best.capital);
+        (fix != typed).then_some(fix)
+    }
+
+    /// Every reading of `lower` within its slip budget, scored.
+    fn readings(&self, lower: &str, previous: Option<&str>, learned: &Learned) -> Vec<Reading> {
         let typed_chars: Vec<char> = lower.chars().collect();
         // One slip in a short word; two only in a long one, where few real
         // words sit that close ("gefixt" is not "Geist").
-        let budget = match length {
+        let budget = match typed_chars.len() {
             ..=7 => 1.0,
             8..=10 => 1.5,
             _ => 2.0,
         };
         let previous = previous.map(str::to_lowercase);
         let mut readings: Vec<Reading> = Vec::new();
-        for model in &self.models {
+        for (index, model) in self.models.iter().enumerate() {
             let previous = previous.as_deref().and_then(|word| model.index(word));
             for (word, edits) in search(model, &typed_chars, budget) {
                 let text = model.text(word);
@@ -96,6 +157,7 @@ impl Corrector {
                     score: edits * EDIT_NATS + model.cost(word, previous),
                     capital: model.capital_share(&text).is_some_and(|share| share >= 95),
                     text,
+                    word: Some((index, word)),
                 });
             }
         }
@@ -106,27 +168,36 @@ impl Corrector {
                     text: word.to_owned(),
                     score: edits * EDIT_NATS + LEARNED_NATS,
                     capital: false,
+                    word: None,
                 });
             }
         }
-        readings.sort_by(|a, b| a.score.total_cmp(&b.score));
-        let Some(best) = readings.first() else {
-            return Verdict::Unknown;
-        };
-        let runner_up = readings
+        readings
+    }
+
+    /// The one real word `lower` reads as with every key taken one to the
+    /// left or right (the hand one key over), and whether it takes a capital.
+    fn shifted(&self, lower: &str, learned: &Learned) -> Option<(String, bool)> {
+        if lower.chars().count() < 4 {
+            return None;
+        }
+        let mut found: Vec<String> = [QWERTZ, QWERTY]
             .iter()
-            .find(|reading| reading.text.to_lowercase() != best.text.to_lowercase());
-        if best.score > MAX_SCORE
-            || runner_up.is_some_and(|other| other.score - best.score < MARGIN_NATS)
-        {
-            return Verdict::Unknown;
-        }
-        let fix = match_case(typed, &best.text, best.capital);
-        if fix == typed {
-            Verdict::Leave
-        } else {
-            Verdict::Fix(fix)
-        }
+            .flat_map(|layout| [-1, 1].map(|shift| shift_word(layout, lower, shift)))
+            .flatten()
+            .filter(|word| learned.knows(word) || self.models.iter().any(|model| model.knows(word)))
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        let [word] = found.as_slice() else {
+            return None;
+        };
+        let capital = self
+            .models
+            .iter()
+            .filter_map(|model| model.capital_share(word))
+            .any(|share| share >= 95);
+        Some((word.clone(), capital))
     }
 
     /// Whether `word` could be `typo` typed with a slip or two, not another
@@ -136,6 +207,19 @@ impl Corrector {
         let word: Vec<char> = word.to_lowercase().chars().collect();
         typo != word && distance(&word, &typo, 2.0).is_some()
     }
+}
+
+/// The best of `readings` by `score`, when it beats the next different word
+/// by the margin and isn't too rare.
+fn pick(readings: &[Reading], score: impl Fn(&Reading) -> f32) -> Option<&Reading> {
+    let mut ranked: Vec<(f32, &Reading)> = readings.iter().map(|r| (score(r), r)).collect();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (top, best) = *ranked.first()?;
+    let runner_up = ranked
+        .iter()
+        .find(|(_, reading)| reading.text.to_lowercase() != best.text.to_lowercase());
+    (best.score <= MAX_SCORE && runner_up.is_none_or(|(other, _)| other - top >= MARGIN_NATS))
+        .then_some(best)
 }
 
 /// `target` cased as `typed` was: a capital first letter carries over, and a
@@ -299,17 +383,33 @@ fn fold(c: char) -> char {
     }
 }
 
+const QWERTZ: [&str; 3] = ["qwertzuiopü", "asdfghjklöä", "yxcvbnm"];
+const QWERTY: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+
+/// The row and column of letter `c` on `layout`.
+fn place(layout: &[&str; 3], c: char) -> Option<(i32, i32)> {
+    layout.iter().enumerate().find_map(|(row, keys)| {
+        keys.chars()
+            .position(|k| k == c)
+            .map(|col| (row as i32, col as i32))
+    })
+}
+
+/// `word` as meant, if it was typed with every key `shift` columns to the
+/// right of the meant one on `layout`.
+fn shift_word(layout: &[&str; 3], word: &str, shift: i32) -> Option<String> {
+    word.chars()
+        .map(|c| {
+            let (row, col) = place(layout, c)?;
+            usize::try_from(col - shift)
+                .ok()
+                .and_then(|col| layout[row as usize].chars().nth(col))
+        })
+        .collect()
+}
+
 /// Whether two letters sit next to each other on QWERTZ or QWERTY.
 fn adjacent(a: char, b: char) -> bool {
-    const QWERTZ: [&str; 3] = ["qwertzuiopü", "asdfghjklöä", "yxcvbnm"];
-    const QWERTY: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
-    let place = |layout: &[&str; 3], c: char| {
-        layout.iter().enumerate().find_map(|(row, keys)| {
-            keys.chars()
-                .position(|k| k == c)
-                .map(|col| (row as i32, col as i32))
-        })
-    };
     [QWERTZ, QWERTY]
         .iter()
         .any(|layout| match (place(layout, a), place(layout, b)) {
@@ -407,6 +507,39 @@ mod tests {
         assert!(Corrector::slip("realy", "really"));
         assert!(!Corrector::slip("hund", "katze"));
         assert!(!Corrector::slip("Haus", "haus"));
+    }
+
+    #[test]
+    fn a_word_typed_one_key_over_is_read_back() {
+        let corrector = Corrector::built_in();
+        assert_eq!(fix(&corrector, "jsööp", None).as_deref(), Some("hallo"));
+        assert_eq!(fix(&corrector, "Jsööp", None).as_deref(), Some("Hallo"));
+        assert_eq!(
+            fix(&corrector, "gfkki", None),
+            None,
+            "a needs a key left of it"
+        );
+        assert_eq!(fix(&corrector, "yjrtr", None).as_deref(), Some("there"));
+        assert_eq!(shift_word(&QWERTZ, "jsööp", 1).as_deref(), Some("hallo"));
+        assert_eq!(shift_word(&QWERTZ, "qwer", 1), None);
+    }
+
+    #[test]
+    fn a_close_call_waits_for_the_next_word() {
+        let corrector = Corrector::built_in();
+        let learned = Learned::default();
+        assert_eq!(corrector.correct("realy", None, &learned), Verdict::Unknown);
+        assert_eq!(
+            corrector
+                .correct_before("Realy", None, "good", &learned)
+                .as_deref(),
+            Some("Really")
+        );
+        assert_eq!(
+            corrector.correct_before("realy", None, "qzxjv", &learned),
+            None,
+            "an unknown next word says nothing"
+        );
     }
 
     #[test]
