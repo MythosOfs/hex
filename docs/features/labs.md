@@ -69,6 +69,20 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        needs a speech model that streams on a GPU, as Live text does
 ├── Failure notices no    labs.failure_notices                   when a dictation fails, its explanation sits beside the HUD for about 6 s, or until the next capture starts
 ├── Live typing     no    labs.live_typing                       (Linux Wayland) provisional words as an underlined input-method preedit in the focused field; the final text is committed there instead of pasted; on a compositor that offers no input method (GNOME) its card is disabled with a note and `hex labs` says so
+├── Autocorrect     no    labs.autocorrect                       (Linux Wayland) Hex holds the seat's input method (zwp_input_method_v2, no keyboard grab)
+│                                        and reads the text before the cursor the focused field reports; one word-ending character
+│                                        (space , . ! ? ; : )) after a clear typo replaces the word (German and English models at
+│                                        once, weighted edit distance with neighbouring keys, `linux/autocorrect`); a word too close
+│                                        to call waits until the next word's pairs decide it (both replaced in one edit), and a word
+│                                        typed with the hand one key over (`jsööp`) is read back as `hallo`. Backspace
+│                                        right after a fix restores the typed word and learns it; an unknown word typed twice is
+│                                        learned too, and a word Hex fixed or left that you delete and retype as a near spelling
+│                                        in the same place twice becomes a fix (owner-only `autocorrect.json`, only those words
+│                                        and pairs stored). Password, PIN, terminal,
+│                                        URL, e-mail, and number fields are skipped; while it holds the seat, Live typing and other
+│                                        input methods (Fcitx5, IBus) get it unavailable. Apps need text-input-v3 surrounding text
+│                                        (GTK, Qt, Firefox; Chromium/Electron with --enable-wayland-ime)
+│                                        // checks: linux::autocorrect (field, correct, learned, model); live_compositor (ignored, needs a compositor)
 ├── Appearance      no    labs.appearance + labs.appearance_theme (system/light/dark, default system)  the main window is forced light or dark instead of following the system; the dictation HUD (including its onboarding and Sounds previews) and meeting recording pill remain dark. Other overlays follow the OS. On Windows the title bar follows too, through its background and light/dark mode; Windows 10 has no caption colour, so DWM keeps its own light or dark caption background (builds before 19041 keep the OS caption) while its text and buttons follow
 ├── Live chapters   no    labs.live_chapters                     chapters a meeting while it records, boundary pass after Stop
 ├── Words on screen no labs.screen_vocabulary         (macOS)   names and terms in the focused window become temporary vocabulary for each dictation; read locally through Accessibility, never saved, password fields skipped

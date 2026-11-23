@@ -28,7 +28,7 @@ use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
 use self::protocol::zwp_input_method_manager_v2::{Event as ManagerEvent, ZwpInputMethodManagerV2};
 use self::protocol::zwp_input_method_v2::{Event as InputMethodEvent, ZwpInputMethodV2};
 
-mod protocol {
+pub(crate) mod protocol {
     //! `input-method-unstable-v2.xml`, vendored from wayland-protocols-misc
     //! (MIT, see the file's copyright header).
 

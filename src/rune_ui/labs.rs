@@ -615,6 +615,22 @@ fn rows(ui: &Ui) -> Vec<Row> {
                 ..live_typing
             });
         }
+        // The same input method Live typing uses, held while the lab is on.
+        let autocorrect = row(Feature::Autocorrect, Some(&KEYBOARD));
+        let unsupported =
+            ui.platform.live_typing_unsupported && Feature::Autocorrect.managed().is_none();
+        rows.push(Row {
+            locked: autocorrect.locked || (unsupported && !autocorrect.on),
+            note: if unsupported {
+                Some(
+                    tr("This desktop doesn't offer the input method Autocorrect needs (GNOME doesn't)")
+                        .to_owned(),
+                )
+            } else {
+                autocorrect.note.clone()
+            },
+            ..autocorrect
+        });
     }
     rows.push(row(Feature::Appearance, Some(&PANEL)));
     if caps.meetings {
@@ -947,6 +963,7 @@ fn row_key(lab: Lab) -> &'static str {
         Feature::FasterLiveText => "lab-faster-live-text",
         Feature::FailureNotices => "lab-failure-notices",
         Feature::LiveTyping => "lab-live-typing",
+        Feature::Autocorrect => "lab-autocorrect",
         Feature::LiveChapters => "lab-live-chapters",
         Feature::ScreenVocabulary => "lab-screen-vocabulary",
         Feature::LearnFromCorrections => "lab-learn-from-corrections",

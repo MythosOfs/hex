@@ -114,6 +114,9 @@ pub struct LabsSettings {
     /// Provisional words in the focused text field as a Wayland input-method
     /// preedit, with the final text committed there (Linux Wayland).
     pub live_typing: bool,
+    /// Clear typos in typed text are fixed as each word ends, and your own
+    /// words are learned (Linux Wayland, through an input method).
+    pub autocorrect: bool,
     pub live_chapters: bool,
     pub playground: bool,
     /// Names and terms shown in the focused window become temporary
@@ -478,6 +481,7 @@ impl Default for LabsSettings {
             faster_live_text: false,
             failure_notices: false,
             live_typing: false,
+            autocorrect: false,
             live_chapters: false,
             playground: false,
             screen_vocabulary: false,

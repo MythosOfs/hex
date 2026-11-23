@@ -50,8 +50,8 @@ language (#216), Mouse shortcuts (#209, macOS), Also pause the browser (#301,
 macOS), Share dictation shortcut (#176, Windows), Free memory when idle
 (#442), Smaller model files (macOS), Terminal paste (Windows), Terminal
 paste shortcut (Windows, Linux), Stop phrase, Signature, Hold through other keys
-(macOS and Windows), Microphone key alone (#181, macOS), and Dictate while
-annotating.
+(macOS and Windows), Microphone key alone (#181, macOS), Autocorrect (#2368,
+Linux Wayland), and Dictate while annotating.
 Externally contributed features land there too.
 Every `Everyone` lab also gets a page on Hex's website,
 `anoma.ly/hex/labs/<id>` (index at `/hex/labs`), built from
@@ -374,6 +374,15 @@ substitute for source inspection or a second roadmap.
   `hex annotate toggle`. Opt-in (`gnome_keyboard_shortcuts`), written while Hex
   listens and removed when it's disabled; an existing entry keeps the key the
   user set in GNOME, and other custom shortcuts are never touched.
+- `linux/autocorrect`: Labs › Autocorrect on Wayland: while on, Hex holds the
+  seat's `zwp_input_method_v2` without grabbing the keyboard, reads the text
+  before the cursor that the focused field reports, and replaces a clear typo
+  when a word-ending character follows it (the phone keyboards' German and
+  English models from `android/app/src/main/assets/typing`, searched at once
+  by weighted edit distance; a close call waits for the next word's pairs,
+  and a word typed one key over is read back). Backspace right after a fix
+  restores the typed word and learns it; a typo you delete and retype the
+  same way twice becomes a fix. Learned words and typos live owner-only in `autocorrect.json`.
 - `linux/clipboard`: the clipboard a Linux paste restores: every format of the
   CLIPBOARD selection read within a size cap and deadline, then served again
   from Hex (ext-data-control, else wlr-data-control on Wayland, its own selection owner with INCR on

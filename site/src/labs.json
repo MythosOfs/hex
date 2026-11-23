@@ -99,6 +99,17 @@
       "title": "Learn from corrections"
     },
     {
+      "added": "2026-11-23",
+      "group": "output",
+      "groupTitle": "Output",
+      "id": "autocorrect",
+      "oses": [
+        "linux"
+      ],
+      "summary": "On Wayland, fix clear typos as you finish each word, in German and English at once. Backspace right after a fix undoes it, and Hex learns the word",
+      "title": "Autocorrect"
+    },
+    {
       "added": "2026-10-30",
       "group": "output",
       "groupTitle": "Output",

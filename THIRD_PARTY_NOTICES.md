@@ -4,6 +4,25 @@ Hex's own source is covered by the root `LICENSE`. The following notices cover
 vendored icon assets and the speech models Hex downloads under their own
 licences. Dependencies retain their respective upstream licenses.
 
+## Autocorrect word lists (Linux)
+
+Labs › Autocorrect builds in the phone keyboards' German and English typing
+data from `android/app/src/main/assets/typing` (`de`/`en` `.hextm`, `.valid`,
+and `.capitals`).
+
+The language models, capitalization lists, and the German validity list are
+derived from Google Books Ngram Viewer, version 3 (2020-02-17), by Google and
+the Google Books Ngram contributors
+(https://storage.googleapis.com/books/ngrams/books/datasetsv3.html), under
+Creative Commons Attribution 3.0 Unported
+(https://creativecommons.org/licenses/by/3.0/). Changes: lowercased and summed
+word and word-pair counts for 1980–2019, filtered spellings, selected
+informative pairs, and quantized probabilities.
+
+The English validity list also uses SCOWL 2020.12.07 (sizes through 70), by
+Kevin Atkinson and contributors (https://wordlist.aspell.net/). Its permission
+and source notices are in `android/app/src/main/assets/licenses/scowl.txt`.
+
 ## Parakeet Ultra
 
 Parakeet Ultra by Moondream, based on NVIDIA Parakeet TDT 0.6B v3. GGUF
