@@ -79,3 +79,19 @@ fn the_yolo_mode_picker_floats_below_its_button_past_the_card() {
         "it reaches past the card instead of growing it: {picker:?} in {card:?}"
     );
 }
+
+#[test]
+fn autocorrect_app_exceptions_can_be_removed_and_added() {
+    let mut rt = runtime("autocorrect", true, PANE_SIZE);
+    assert!(rt.find("nav-autocorrect").is_some());
+    tap(&mut rt, "autocorrect-app-0");
+    assert_eq!(rt.state.settings.labs.autocorrect_excluded_apps, ["kitty"]);
+    tap(&mut rt, "open-autocorrect-app-picker");
+    tap(&mut rt, "available0");
+    assert_eq!(
+        rt.state.settings.labs.autocorrect_excluded_apps,
+        ["Firefox", "kitty"]
+    );
+    tap(&mut rt, "autocorrect-snippets");
+    assert!(!rt.state.settings.labs.autocorrect_snippets);
+}

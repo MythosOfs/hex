@@ -6,6 +6,8 @@
 //! Voice Filter, Playground, Modes editor) joins the main sidebar while on
 //! and is hidden while off.
 
+#[cfg(target_os = "linux")]
+pub(super) mod autocorrect;
 mod group;
 #[cfg(target_os = "macos")]
 mod hud_height;
@@ -57,6 +59,10 @@ pub(super) fn main_panes(ui: &Ui) -> Vec<Pane> {
     #[cfg(not(hex_capture))]
     let optional = [Pane::Meetings, Pane::VoiceFilter];
     panes.extend(optional.into_iter().filter(|pane| pane.shown(ui)));
+    #[cfg(target_os = "linux")]
+    if Pane::Autocorrect.shown(ui) {
+        panes.push(Pane::Autocorrect);
+    }
     panes
 }
 

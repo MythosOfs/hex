@@ -117,6 +117,8 @@ pub struct LabsSettings {
     /// Clear typos in typed text are fixed as each word ends, and your own
     /// words are learned (Linux Wayland, through an input method).
     pub autocorrect: bool,
+    pub autocorrect_excluded_apps: Vec<String>,
+    pub autocorrect_snippets: bool,
     pub live_chapters: bool,
     pub playground: bool,
     /// Names and terms shown in the focused window become temporary
@@ -482,6 +484,8 @@ impl Default for LabsSettings {
             failure_notices: false,
             live_typing: false,
             autocorrect: false,
+            autocorrect_excluded_apps: Vec::new(),
+            autocorrect_snippets: false,
             live_chapters: false,
             playground: false,
             screen_vocabulary: false,

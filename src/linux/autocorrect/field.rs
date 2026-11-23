@@ -42,6 +42,7 @@ struct Applied {
     prefix: String,
     /// The typed words the fix changed, yours once you take it back.
     changed: Vec<String>,
+    ending: char,
 }
 
 struct Finished {
@@ -62,6 +63,32 @@ impl Field {
         *self = Self::default();
     }
 
+    pub(super) fn correction(&self) -> Option<(&str, &str)> {
+        let applied = self
+            .last
+            .as_ref()
+            .filter(|entry| !entry.changed.is_empty())?;
+        Some((&applied.original, &applied.fix))
+    }
+
+    /// Explicit undo preserves the word-ending character and never learns from it.
+    pub(super) fn undo(&mut self) -> Option<Edit> {
+        let last = self.last.as_ref()?;
+        let before = self.before.as_deref()?;
+        let suffix = before.strip_prefix(&last.prefix)?.strip_prefix(&last.fix)?;
+        if !suffix.starts_with(last.ending) || suffix.len() != last.ending.len_utf8() {
+            return None;
+        }
+        let last = self.last.take()?;
+        let insert = format!("{}{}", last.original, last.ending);
+        self.expect = Some(format!("{}{insert}", last.prefix));
+        self.finished = None;
+        Some(Edit {
+            delete: last.fix.len() + last.ending.len_utf8(),
+            insert,
+        })
+    }
+
     /// The text before the cursor is now `before` (None while unknown or a
     /// selection is held); the edit to make, if any.
     pub(crate) fn changed(
@@ -69,6 +96,7 @@ impl Field {
         before: Option<&str>,
         corrector: &Corrector,
         learned: &mut Learned,
+        snippets: bool,
     ) -> Option<Edit> {
         let Some(now) = before else {
             self.reset();
@@ -105,10 +133,18 @@ impl Field {
         }
         let ending = now.strip_prefix(earlier?.as_str())?;
         let mut chars = ending.chars();
-        if !chars.next().is_some_and(|c| ENDINGS.contains(&c)) || chars.next().is_some() {
+        let ending = chars.next().filter(|c| ENDINGS.contains(c))?;
+        if chars.next().is_some() {
             return None;
         }
-        let earlier = &now[..now.len() - ending.len()];
+        let earlier = &now[..now.len() - ending.len_utf8()];
+        if snippets
+            && ending == ' '
+            && let Some((prefix, key, value)) = super::snippets::expand(earlier)
+        {
+            self.finished = None;
+            return Some(self.replace(prefix, key, value, Vec::new(), ending));
+        }
         let word = current_word(earlier)?;
         let prefix = &earlier[..earlier.len() - word.len()];
         let verdict = corrector.correct(word, previous_word(prefix), learned);
@@ -172,18 +208,30 @@ impl Field {
             typed: word.to_owned(),
             unknown: verdict == Verdict::Unknown,
         });
-        self.expect = Some(format!("{start}{fix}{ending}"));
-        let edit = Edit {
-            delete: original.len() + ending.len(),
-            insert: format!("{fix}{ending}"),
-        };
+        Some(self.replace(&start, &original, fix, changed, ending))
+    }
+
+    fn replace(
+        &mut self,
+        prefix: &str,
+        original: &str,
+        fix: String,
+        changed: Vec<String>,
+        ending: char,
+    ) -> Edit {
+        let insert = format!("{fix}{ending}");
+        self.expect = Some(format!("{prefix}{insert}"));
         self.last = Some(Applied {
-            original,
+            original: original.to_owned(),
             fix,
-            prefix: start,
+            prefix: prefix.to_owned(),
             changed,
+            ending,
         });
-        Some(edit)
+        Edit {
+            delete: original.len() + ending.len_utf8(),
+            insert,
+        }
     }
 }
 
@@ -228,16 +276,71 @@ mod tests {
             } else {
                 text.push(c);
             }
-            if let Some(edit) = field.changed(Some(text), corrector, learned) {
+            if let Some(edit) = field.changed(Some(text), corrector, learned, false) {
                 text.truncate(text.len() - edit.delete);
                 text.push_str(&edit.insert);
                 assert_eq!(
-                    field.changed(Some(text), corrector, learned),
+                    field.changed(Some(text), corrector, learned, false),
                     None,
                     "the echo"
                 );
             }
         }
+    }
+
+    #[test]
+    fn explicit_undo_preserves_the_delimiter_and_does_not_teach_the_typo() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        let mut field = Field::default();
+        let mut text = String::new();
+        type_into(&mut field, &corrector, &mut learned, &mut text, "so teh ");
+        assert_eq!(text, "so the ");
+        assert_eq!(
+            field.undo(),
+            Some(Edit {
+                delete: 4,
+                insert: "teh ".into()
+            })
+        );
+        assert_eq!(field.undo(), None);
+        assert!(!learned.knows("teh"));
+        assert_eq!(
+            field.changed(Some("so teh "), &corrector, &mut learned, false),
+            None
+        );
+        assert_eq!(field.changed(None, &corrector, &mut learned, false), None);
+        assert_eq!(field.undo(), None);
+    }
+
+    #[test]
+    fn enabled_snippets_use_the_same_edit_and_undo_path() {
+        let corrector = Corrector::built_in();
+        let mut learned = Learned::default();
+        let mut field = Field::default();
+        assert_eq!(
+            field.changed(Some(";lg"), &corrector, &mut learned, true),
+            None
+        );
+        assert_eq!(
+            field.changed(Some(";lg "), &corrector, &mut learned, true),
+            Some(Edit {
+                delete: 4,
+                insert: "Liebe Grüße ".into()
+            })
+        );
+        assert_eq!(
+            field.changed(Some("Liebe Grüße "), &corrector, &mut learned, true),
+            None
+        );
+        assert_eq!(
+            field.undo(),
+            Some(Edit {
+                delete: "Liebe Grüße ".len(),
+                insert: ";lg ".into()
+            })
+        );
+        assert_eq!(learned.generation(), 0);
     }
 
     #[test]
@@ -318,24 +421,27 @@ mod tests {
         let corrector = Corrector::built_in();
         let mut learned = Learned::default();
         let mut field = Field::default();
-        assert_eq!(field.changed(Some("x"), &corrector, &mut learned), None);
         assert_eq!(
-            field.changed(Some("x teh "), &corrector, &mut learned),
+            field.changed(Some("x"), &corrector, &mut learned, false),
+            None
+        );
+        assert_eq!(
+            field.changed(Some("x teh "), &corrector, &mut learned, false),
             None,
             "a paste"
         );
         assert_eq!(
-            field.changed(Some("see ~/teh"), &corrector, &mut learned),
+            field.changed(Some("see ~/teh"), &corrector, &mut learned, false),
             None
         );
         assert_eq!(
-            field.changed(Some("see ~/teh "), &corrector, &mut learned),
+            field.changed(Some("see ~/teh "), &corrector, &mut learned, false),
             None,
             "a path"
         );
-        assert_eq!(field.changed(None, &corrector, &mut learned), None);
+        assert_eq!(field.changed(None, &corrector, &mut learned, false), None);
         assert_eq!(
-            field.changed(Some("teh "), &corrector, &mut learned),
+            field.changed(Some("teh "), &corrector, &mut learned, false),
             None,
             "after a selection"
         );

@@ -355,6 +355,16 @@ pub(super) const KEYS: &[Key] = &[
         "Labs: provisional words in the focused text field as an underlined input-method preedit, and the final text typed there instead of pasted (Linux Wayland)",
     ),
     key(
+        "labs.autocorrect_excluded_apps",
+        Kind::Json,
+        "Autocorrect: a JSON list of application names to skip on Linux Wayland",
+    ),
+    key(
+        "labs.autocorrect_snippets",
+        Kind::Bool,
+        "Autocorrect: expand built-in text snippets on Linux Wayland",
+    ),
+    key(
         "labs.autocorrect",
         Kind::Bool,
         "Labs: fix clear typos in German and English as you finish each word you type, learning your own words; Backspace right after a fix undoes it (Linux Wayland)",

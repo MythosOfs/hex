@@ -91,6 +91,32 @@ impl Learned {
             .map(|entry| entry.text.as_str())
     }
 
+    pub(super) fn entries(&self, query: &str) -> Vec<(bool, String, String)> {
+        self.words
+            .iter()
+            .filter(|(key, entry)| entry.learned() && key.contains(query))
+            .map(|(key, entry)| (false, key.clone(), entry.text.clone()))
+            .chain(
+                self.typos
+                    .iter()
+                    .filter(|(key, typo)| {
+                        typo.retyped >= TYPED_TO_LEARN
+                            && (key.contains(query) || typo.word.to_lowercase().contains(query))
+                    })
+                    .map(|(key, typo)| (true, key.clone(), format!("{key} → {}", typo.word))),
+            )
+            .collect()
+    }
+
+    pub(super) fn forget(&mut self, typo: bool, key: &str) {
+        let removed = if typo {
+            self.typos.remove(key).is_some()
+        } else {
+            self.words.remove(key).is_some()
+        };
+        self.generation += u64::from(removed);
+    }
+
     /// You took a correction of `word` back: it is yours from now on.
     pub(crate) fn keep(&mut self, word: &str) {
         self.typos.remove(&word.to_lowercase());

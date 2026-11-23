@@ -79,6 +79,12 @@ fn unavailable_under(name: &str, policy: crate::policy::Policy) -> Option<Contro
             format!("`{name}` belongs to Labs › More dictation shortcuts, which only macOS has"),
         ));
     }
+    if name.starts_with("labs.autocorrect_") && !cfg!(target_os = "linux") {
+        return Some(ControlError::new(
+            "unsupported",
+            format!("`{name}` belongs to Labs › Autocorrect, which requires Linux Wayland"),
+        ));
+    }
     let capability = needs(name).filter(|capability| !crate::rune_ui::capability(capability))?;
     Some(ControlError::new(
         "unsupported",

@@ -317,6 +317,8 @@ pub fn window_dark(labs: &LabsSettings, system_dark: bool) -> bool {
 
 /// Records the switches the loaded or saved settings hold.
 pub(crate) fn apply(settings: &LabsSettings) {
+    #[cfg(target_os = "linux")]
+    crate::linux::autocorrect::apply(settings);
     {
         let _guard = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         store_all(settings);

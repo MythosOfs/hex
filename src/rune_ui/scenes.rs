@@ -952,6 +952,15 @@ pub(super) const SCENES: &[Scene] = &[
         ui.settings.labs.typed_text = true;
         ui.labs_open = true;
     }),
+    #[cfg(target_os = "linux")]
+    ("autocorrect", |ui| {
+        *ui = portal_fixture();
+        modes::fixture_catalog(ui);
+        ui.settings.labs.autocorrect = true;
+        ui.settings.labs.autocorrect_snippets = true;
+        ui.settings.labs.autocorrect_excluded_apps = vec!["code".into(), "kitty".into()];
+        ui.pane = Pane::Autocorrect;
+    }),
     ("mac-production", |ui| {
         *ui = mac_fixture();
         ui.settings.meetings.enabled = false;

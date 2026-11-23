@@ -86,6 +86,8 @@ the `hex-annotate` skill into Claude Code, Codex, OpenCode, or Pi, and on macOS
 links `hex` onto PATH.
 [Screenshots](labs.md) (Labs, macOS) takes CleanShot-style ⌘⇧4 area and
 window screenshots, and with Annotate on records from a ⌘⇧5 toolbar.
+[Autokorrektur unter Hyprland](linux-autocorrect.md) covers typing on a physical
+keyboard, Alt+right-click undo, built-in text snippets, and app exclusions.
 The other capabilities stay here until they need their own verification recipe.
 
 ## Get Ready

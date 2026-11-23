@@ -13,6 +13,7 @@ use strings::TRANSLATIONS;
 
 mod agents;
 mod annotate_dictation;
+mod autocorrect;
 mod calls;
 mod clock;
 mod failures;
@@ -598,6 +599,7 @@ mod tests {
         include_str!("../rune_ui/history/selection.rs"),
         include_str!("../rune_ui/hud_lab.rs"),
         include_str!("../rune_ui/labs.rs"),
+        include_str!("../rune_ui/labs/autocorrect.rs"),
         include_str!("../rune_ui/labs/group.rs"),
         include_str!("../rune_ui/labs/hud_height.rs"),
         include_str!("../rune_ui/labs/screenshots.rs"),

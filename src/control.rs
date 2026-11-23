@@ -101,6 +101,8 @@ pub enum ControlCommand {
     /// Labs › Transform typed text (Linux): runs the focused field's text
     /// through its Output steps and replaces it, as its shortcut does.
     TypedText,
+    /// Undo the latest correction in the focused Wayland text field.
+    AutocorrectUndo,
     /// Labs › Screenshots (macOS): the display under the pointer, or with
     /// `pick` the picker its shortcut opens.
     Screenshot {

@@ -16,10 +16,12 @@ mod correct;
 mod field;
 mod learned;
 mod model;
+mod snippets;
 
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -40,36 +42,119 @@ use crate::linux::live_typing::protocol::zwp_input_method_v2::{
 };
 
 /// How often the thread looks at the lab's switch and Hex's shutdown.
-const TICK: Duration = Duration::from_millis(500);
+const TICK: Duration = Duration::from_millis(100);
 /// How long after the seat was unavailable Hex asks for it again.
 const RETRY: Duration = Duration::from_secs(30);
 /// Learned words are written at most this often.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct Preferences {
+    excluded_apps: Vec<String>,
+    snippets: bool,
+}
+
+static PREFERENCES: Mutex<Preferences> = Mutex::new(Preferences {
+    excluded_apps: Vec::new(),
+    snippets: false,
+});
+static DICTIONARY: OnceLock<(Option<PathBuf>, Mutex<Learned>)> = OnceLock::new();
+static REVISION: AtomicU64 = AtomicU64::new(0);
+static LAST_CORRECTION: Mutex<Option<(String, String)>> = Mutex::new(None);
+static UNDO: OnceLock<mpsc::SyncSender<Undo>> = OnceLock::new();
+
+struct Undo {
+    deadline: Instant,
+    reply: mpsc::Sender<Result<bool, String>>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+pub(crate) fn apply(settings: &crate::app_settings::LabsSettings) {
+    *lock(&PREFERENCES) = Preferences {
+        excluded_apps: settings.autocorrect_excluded_apps.clone(),
+        snippets: settings.autocorrect_snippets,
+    };
+}
+
+fn dictionary() -> &'static (Option<PathBuf>, Mutex<Learned>) {
+    DICTIONARY.get_or_init(|| {
+        let path = crate::app_paths::support_dir()
+            .ok()
+            .map(|dir| dir.join("autocorrect.json"));
+        let learned = path.as_deref().map(Learned::load).unwrap_or_default();
+        (path, Mutex::new(learned))
+    })
+}
+
+pub(crate) fn entries(query: &str) -> Vec<(bool, String, String)> {
+    lock(&dictionary().1).entries(&query.trim().to_lowercase())
+}
+
+pub(crate) fn revision() -> u64 {
+    REVISION.load(Ordering::Relaxed)
+}
+
+pub(crate) fn last_correction() -> Option<(String, String)> {
+    lock(&LAST_CORRECTION).clone()
+}
+
+pub(crate) fn forget(typo: bool, key: &str) -> std::io::Result<()> {
+    let (path, learned) = dictionary();
+    let mut learned = lock(learned);
+    learned.forget(typo, key);
+    REVISION.fetch_add(1, Ordering::Relaxed);
+    if let Some(path) = path {
+        learned.save(path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn undo() -> Result<bool, String> {
+    let sender = UNDO
+        .get()
+        .filter(|_| crate::labs::autocorrect())
+        .ok_or("Enable Labs › Autocorrect in a Wayland session first")?;
+    let (reply, response) = mpsc::channel();
+    let timeout = Duration::from_secs(1);
+    sender
+        .try_send(Undo {
+            deadline: Instant::now() + timeout,
+            reply,
+        })
+        .map_err(|_| "Autocorrect is busy")?;
+    response
+        .recv_timeout(timeout)
+        .map_err(|_| "Autocorrect did not respond")?
+}
 
 /// Starts the autocorrect thread on Wayland; it idles while the lab is off.
 pub(crate) fn start(shutdown: &'static AtomicBool) {
     if !crate::linux::session::LinuxSession::detect().is_wayland() {
         return;
     }
+    let (sender, requests) = mpsc::sync_channel(1);
+    if UNDO.set(sender).is_err() {
+        return;
+    }
     if let Err(error) = thread::Builder::new()
         .name("hex-autocorrect".into())
-        .spawn(move || run(shutdown))
+        .spawn(move || run(shutdown, requests))
     {
         tracing::info!(%error, "autocorrect is unavailable");
     }
 }
 
-fn run(shutdown: &'static AtomicBool) {
-    let path = crate::app_paths::support_dir()
-        .map(|dir| dir.join("autocorrect.json"))
-        .ok();
+fn run(shutdown: &AtomicBool, requests: mpsc::Receiver<Undo>) {
     let mut owner: Option<Owner> = None;
     let mut retry_at = Instant::now();
     let mut saved_at = Instant::now();
     while !shutdown.load(Ordering::Acquire) {
         let on = crate::labs::autocorrect();
         if on && owner.is_none() && Instant::now() >= retry_at {
-            match Owner::connect(path.clone()) {
+            match Owner::connect() {
                 Ok(connected) => owner = Some(connected),
                 Err(error) => {
                     tracing::info!(%error, "autocorrect could not become the input method");
@@ -81,7 +166,11 @@ fn run(shutdown: &'static AtomicBool) {
             ended.end();
         }
         let Some(current) = &mut owner else {
-            thread::sleep(TICK);
+            if let Ok(request) = requests.recv_timeout(TICK) {
+                let _ = request
+                    .reply
+                    .send(Err("Autocorrect does not hold the input method".into()));
+            }
             continue;
         };
         if let Err(error) = current.pump(TICK) {
@@ -97,6 +186,12 @@ fn run(shutdown: &'static AtomicBool) {
             owner = None;
             retry_at = Instant::now() + RETRY;
             continue;
+        }
+        if let Ok(request) = requests.try_recv() {
+            let result = current
+                .undo(request.deadline)
+                .map_err(|error| error.to_string());
+            let _ = request.reply.send(result);
         }
         if saved_at.elapsed() >= SAVE_EVERY {
             current.save();
@@ -114,11 +209,11 @@ struct Owner {
     manager: ZwpInputMethodManagerV2,
     method: ZwpInputMethodV2,
     state: State,
-    path: Option<PathBuf>,
+    saved_generation: u64,
 }
 
 impl Owner {
-    fn connect(path: Option<PathBuf>) -> Result<Self> {
+    fn connect() -> Result<Self> {
         let connection =
             Connection::connect_to_env().wrap_err("there is no Wayland display to reach")?;
         let (globals, mut queue) = registry_queue_init::<State>(&connection)
@@ -131,8 +226,7 @@ impl Owner {
             .bind(&handle, 1..=1, ())
             .wrap_err("this compositor offers no zwp_input_method_manager_v2")?;
         let method = manager.get_input_method(&seat, &handle, ());
-        let learned = path.as_deref().map(Learned::load).unwrap_or_default();
-        let mut state = State::new(Corrector::built_in(), learned);
+        let mut state = State::new(Corrector::built_in());
         queue
             .roundtrip(&mut state)
             .wrap_err("the compositor did not answer")?;
@@ -143,7 +237,7 @@ impl Owner {
             manager,
             method,
             state,
-            path,
+            saved_generation: 0,
         })
     }
 
@@ -154,18 +248,44 @@ impl Owner {
         // A fix is sent only while no newer text has arrived: once you typed
         // on, deleting the word's bytes before the cursor would hit your new
         // letters.
-        while let Some((edit, base)) = self.state.pending_edit.take() {
+        while let Some((edit, base, field_epoch)) = self.state.pending_edit.take() {
             self.turn(Duration::ZERO)?;
-            if self.state.field.before() == Some(base.as_str()) {
-                let serial = self.state.serial;
-                let delete = u32::try_from(edit.delete).unwrap_or(u32::MAX);
-                self.method.delete_surrounding_text(delete, 0);
-                self.method.commit_string(edit.insert);
-                self.method.commit(serial);
+            if self.state.field_epoch == field_epoch
+                && self.state.field.before() == Some(base.as_str())
+                && self.state.allowed(&lock(&PREFERENCES))
+            {
+                self.commit(edit);
+                if let Some((original, fix)) = self.state.field.correction() {
+                    *lock(&LAST_CORRECTION) = Some((original.to_owned(), fix.to_owned()));
+                    REVISION.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
         self.connection.flush()?;
         Ok(())
+    }
+
+    fn commit(&self, edit: field::Edit) {
+        let delete = u32::try_from(edit.delete).unwrap_or(u32::MAX);
+        self.method.delete_surrounding_text(delete, 0);
+        self.method.commit_string(edit.insert);
+        self.method.commit(self.state.serial);
+    }
+
+    fn undo(&mut self, deadline: Instant) -> Result<bool> {
+        self.turn(Duration::ZERO)?;
+        if Instant::now() >= deadline
+            || !crate::labs::autocorrect()
+            || !self.state.allowed(&lock(&PREFERENCES))
+        {
+            return Ok(false);
+        }
+        if let Some(edit) = self.state.field.undo() {
+            self.commit(edit);
+            self.connection.flush()?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Dispatches what has arrived, waiting up to `timeout` for more.
@@ -185,16 +305,19 @@ impl Owner {
     }
 
     fn save(&mut self) {
-        if !self.state.dirty {
+        let (path, learned) = dictionary();
+        let learned = lock(learned);
+        let generation = learned.generation();
+        if self.saved_generation == generation {
             return;
         }
-        if let Some(path) = &self.path
-            && let Err(error) = self.state.learned.save(path)
+        if let Some(path) = path
+            && let Err(error) = learned.save(path)
         {
             tracing::warn!(%error, "autocorrect could not save its learned words");
             return;
         }
-        self.state.dirty = false;
+        self.saved_generation = generation;
     }
 
     /// Gives the seat's input method back.
@@ -222,8 +345,9 @@ fn readable(fd: std::os::fd::BorrowedFd<'_>, timeout: Duration) -> bool {
 /// The input method's double-buffered state and what autocorrect knows.
 struct State {
     corrector: Corrector,
-    learned: Learned,
+    application: Option<String>,
     field: Field,
+    field_epoch: u64,
     /// The number of `done` events seen; the serial `commit` takes.
     serial: u32,
     active: bool,
@@ -233,19 +357,18 @@ struct State {
     pending_active: Option<bool>,
     pending_text: Option<(String, u32, u32)>,
     pending_content: Option<bool>,
-    /// Learned words changed since the last save.
-    dirty: bool,
     /// The fix a `done` asked for, with the text before the cursor it was
     /// made for, until it is sent.
-    pending_edit: Option<(field::Edit, String)>,
+    pending_edit: Option<(field::Edit, String, u64)>,
 }
 
 impl State {
-    fn new(corrector: Corrector, learned: Learned) -> Self {
+    fn new(corrector: Corrector) -> Self {
         Self {
             corrector,
-            learned,
+            application: None,
             field: Field::default(),
+            field_epoch: 0,
             serial: 0,
             active: false,
             writable: true,
@@ -253,38 +376,69 @@ impl State {
             pending_active: None,
             pending_text: None,
             pending_content: None,
-            dirty: false,
             pending_edit: None,
         }
     }
 
+    fn reset_field(&mut self) {
+        self.field_epoch = self.field_epoch.wrapping_add(1);
+        self.field.reset();
+        self.pending_edit = None;
+    }
+
+    fn allowed(&self, prefs: &Preferences) -> bool {
+        self.active
+            && self.writable
+            && !self.unavailable
+            && application_allowed(&prefs.excluded_apps, self.application.as_deref())
+    }
+
     /// Applies one `done`, and returns the edit to commit with its serial.
-    fn done(&mut self) -> Option<field::Edit> {
+    fn done(
+        &mut self,
+        prefs: &Preferences,
+        learned: &mut Learned,
+        application: impl FnOnce() -> Option<String>,
+    ) -> Option<field::Edit> {
         self.serial = self.serial.wrapping_add(1);
         if let Some(active) = self.pending_active.take() {
             self.active = active;
             self.writable = true;
-            self.field.reset();
+            self.reset_field();
+            self.application = active.then(application).flatten();
         }
         if let Some(writable) = self.pending_content.take() {
             self.writable = writable;
         }
         let text = self.pending_text.take();
-        if !self.active || !self.writable {
-            self.field.reset();
+        if !self.allowed(prefs) {
+            self.reset_field();
             return None;
         }
         let (text, cursor, anchor) = text?;
         let cursor = cursor as usize;
         let before =
             (cursor == anchor as usize && text.is_char_boundary(cursor)).then(|| &text[..cursor]);
-        let generation = self.learned.generation();
+        let Some(before) = before else {
+            self.reset_field();
+            return None;
+        };
+        let revision = learned.generation();
         let edit = self
             .field
-            .changed(before, &self.corrector, &mut self.learned);
-        self.dirty |= generation != self.learned.generation();
+            .changed(Some(before), &self.corrector, learned, prefs.snippets);
+        if learned.generation() != revision {
+            REVISION.fetch_add(1, Ordering::Relaxed);
+        }
         edit
     }
+}
+
+fn application_allowed(excluded: &[String], application: Option<&str>) -> bool {
+    application != Some(super::portal::APP_ID)
+        && (excluded.is_empty()
+            || application
+                .is_some_and(|name| !excluded.iter().any(|app| app.eq_ignore_ascii_case(name))))
 }
 
 /// Whether a field of this kind takes autocorrect.
@@ -323,10 +477,18 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
             InputMethodEvent::Done => {
                 // An unsent fix waits through repeated reports of the same
                 // text; `pump` drops it once the text moved on.
-                if let Some(edit) = state.done()
+                // Resolve the app only on activation, outside the settings and
+                // dictionary locks.
+                let application = (state.pending_active == Some(true))
+                    .then(crate::linux::context::focused_wayland_application)
+                    .flatten();
+                if let Some(edit) =
+                    state.done(&lock(&PREFERENCES), &mut lock(&dictionary().1), || {
+                        application
+                    })
                     && let Some(base) = state.field.before()
                 {
-                    state.pending_edit = Some((edit, base.to_owned()));
+                    state.pending_edit = Some((edit, base.to_owned(), state.field_epoch));
                 }
             }
             InputMethodEvent::Unavailable => state.unavailable = true,
@@ -396,7 +558,8 @@ mod tests {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(10);
-        let mut owner = Owner::connect(None).unwrap();
+        let _ = DICTIONARY.set((None, Mutex::new(Learned::default())));
+        let mut owner = Owner::connect().unwrap();
         let end = Instant::now() + Duration::from_secs(seconds);
         while Instant::now() < end {
             owner.pump(TICK).unwrap();
@@ -409,15 +572,45 @@ mod tests {
     }
 
     #[test]
+    fn an_excluded_app_neither_changes_text_nor_learns() {
+        let mut state = State::new(Corrector::built_in());
+        let mut learned = Learned::default();
+        let mut prefs = Preferences {
+            excluded_apps: vec!["Editor".into()],
+            snippets: true,
+        };
+        let app = || Some("editor".into());
+        state.pending_active = Some(true);
+        state.pending_text = Some((";lg".into(), 3, 3));
+        assert_eq!(state.done(&prefs, &mut learned, app), None);
+        state.pending_text = Some((";lg ".into(), 4, 4));
+        assert_eq!(state.done(&prefs, &mut learned, app), None);
+        assert_eq!(state.field.before(), None);
+        assert_eq!(learned.generation(), 0);
+
+        prefs.excluded_apps.clear();
+        state.pending_text = Some((";lg".into(), 3, 3));
+        assert_eq!(state.done(&prefs, &mut learned, app), None);
+        state.pending_text = Some((";lg ".into(), 4, 4));
+        assert_eq!(
+            state.done(&prefs, &mut learned, app).unwrap().insert,
+            "Liebe Grüße "
+        );
+    }
+
+    #[test]
     fn a_done_applies_activation_and_fixes_the_finished_word() {
-        let mut state = State::new(Corrector::built_in(), Learned::default());
+        let mut state = State::new(Corrector::built_in());
+        let mut learned = Learned::default();
+        let prefs = Preferences::default();
+        let app = || Some("test".into());
         state.pending_text = Some(("teh".into(), 3, 3));
-        assert_eq!(state.done(), None, "inactive");
+        assert_eq!(state.done(&prefs, &mut learned, app), None, "inactive");
         state.pending_active = Some(true);
         state.pending_text = Some(("so teh".into(), 6, 6));
-        assert_eq!(state.done(), None);
+        assert_eq!(state.done(&prefs, &mut learned, app), None);
         state.pending_text = Some(("so teh ".into(), 7, 7));
-        let edit = state.done().unwrap();
+        let edit = state.done(&prefs, &mut learned, app).unwrap();
         assert_eq!((edit.delete, edit.insert.as_str()), (4, "the "));
         assert_eq!(state.serial, 3);
     }

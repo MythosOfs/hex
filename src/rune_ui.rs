@@ -100,7 +100,7 @@ use onboarding_kit::live::Page;
 use scenes::{SCENES, Scene, fixture, mac_fixture, portal_fixture};
 use settings::Capture;
 pub(crate) use shortcut_rule::shortcut_rule;
-use sidebar::{BuildKind, Pane, pane_header, sidebar};
+use sidebar::{BuildKind, Pane, leave_hidden_pane, pane_header, sidebar};
 
 /// How long typing pauses before a text field's edit is saved.
 const DRAFT_DELAY: Duration = Duration::from_millis(250);
@@ -657,6 +657,10 @@ pub(crate) struct Ui {
     /// The settings the host last reported, to adopt only its changes.
     service_settings: Option<AppSettings>,
     pane: Pane,
+    #[cfg(target_os = "linux")]
+    autocorrect_search: rune::TextEdit,
+    #[cfg(target_os = "linux")]
+    autocorrect_revision: u64,
     modal: Option<Modal>,
     open: Option<Menu>,
     // General
@@ -815,6 +819,10 @@ impl Ui {
             connection_error: None,
             service_settings: None,
             pane: Pane::General,
+            #[cfg(target_os = "linux")]
+            autocorrect_search: Default::default(),
+            #[cfg(target_os = "linux")]
+            autocorrect_revision: 0,
             modal: None,
             open: None,
             microphones: Ok(Default::default()),
@@ -1378,6 +1386,11 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     let now = Instant::now();
     let mut changed = ui.save_drafts(now);
     changed |= paste_access::poll(ui);
+    #[cfg(target_os = "linux")]
+    if ui.live() && ui.pane == Pane::Autocorrect && !ui.labs_open {
+        let next = crate::linux::autocorrect::revision();
+        changed |= std::mem::replace(&mut ui.autocorrect_revision, next) != next;
+    }
     // The OpenCode catalog is read only while a pane that uses it shows:
     // Modes, or Meetings › Settings while OpenCode writes the summaries.
     changed |= ui.models.poll(
@@ -1505,23 +1518,6 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed | settings::advance_capture(ui, clock, tx)
 }
 
-/// Adopted settings may hide the pane on screen: the Hex Microphone turned off
-/// from `hex settings` hides Voice Filter, and Labs › Modes editor turned off
-/// while the editor shows hides Modes. The window leaves, Output standing in
-/// for the editor it replaced. Returns whether the pane moved.
-fn leave_hidden_pane(ui: &mut Ui) -> bool {
-    if ui.pane.shown(ui) {
-        return false;
-    }
-    ui.pane = match ui.pane {
-        Pane::Modes => Pane::Output,
-        _ => Pane::General,
-    };
-    ui.close_modal();
-    ui.open = None;
-    true
-}
-
 // ---------------------------------------------------------------------------
 // View
 
@@ -1552,6 +1548,8 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         #[cfg(hex_capture)]
         Pane::Annotate => (Vec::new(), scrawl::pane(ui, p, &mut layer)),
         Pane::VoiceFilter => (Vec::new(), fun::pane(ui, p)),
+        #[cfg(target_os = "linux")]
+        Pane::Autocorrect => (Vec::new(), labs::autocorrect::pane(ui, p, &mut layer)),
         Pane::HudLab => hud_lab::pane(ui, p),
         Pane::Activity => activity::pane(ui, p),
         Pane::WhatsNew => (Vec::new(), whats_new::feed(ui, p)),

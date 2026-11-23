@@ -78,6 +78,8 @@ pub(super) enum Pane {
     /// The Hex Microphone's driver, tuning, and try-it demo (macOS, while
     /// its Labs toggle is on).
     VoiceFilter,
+    #[cfg(target_os = "linux")]
+    Autocorrect,
     /// The dictation indicator's tuning scene (Playground only).
     HudLab,
     /// Legacy event-log inspector scene (Playground only).
@@ -98,6 +100,7 @@ impl Pane {
         #[cfg(hex_capture)]
         Pane::Annotate,
         Pane::VoiceFilter,
+        Pane::Autocorrect,
         Pane::HudLab,
         Pane::Activity,
     ];
@@ -111,6 +114,12 @@ impl Pane {
             Pane::Meetings => caps.meetings && meetings::available(ui),
             // On from Labs (dev builds), or while its driver is installed.
             Pane::VoiceFilter => caps.fun && fun::running(ui),
+            #[cfg(target_os = "linux")]
+            Pane::Autocorrect => {
+                caps.os == platform::Os::Linux
+                    && ui.platform.wayland
+                    && crate::labs::Feature::Autocorrect.on(&ui.settings)
+            }
             #[cfg(hex_capture)]
             Pane::Annotate => ui.platform.scrawl.is_some(),
             // The Lab turns on only on macOS.
@@ -134,6 +143,8 @@ impl Pane {
             #[cfg(hex_capture)]
             Pane::Annotate => tr("Annotate"),
             Pane::VoiceFilter => tr("Voice Filter"),
+            #[cfg(target_os = "linux")]
+            Pane::Autocorrect => tr("Autocorrect"),
             Pane::HudLab => "HUD Lab",
             Pane::Activity => tr("Activity"),
             Pane::WhatsNew => tr("What's new"),
@@ -152,6 +163,8 @@ impl Pane {
             #[cfg(hex_capture)]
             Pane::Annotate => "nav-annotate",
             Pane::VoiceFilter => "nav-voice-filter",
+            #[cfg(target_os = "linux")]
+            Pane::Autocorrect => "nav-autocorrect",
             Pane::HudLab => "nav-hud-lab",
             Pane::Activity => "nav-activity",
             Pane::WhatsNew => "nav-whats-new",
@@ -170,11 +183,30 @@ impl Pane {
             #[cfg(hex_capture)]
             Pane::Annotate => &SCRAWL_ICON,
             Pane::VoiceFilter => &VOICE_FILTER_ICON,
+            #[cfg(target_os = "linux")]
+            Pane::Autocorrect => &icons::KEYBOARD,
             Pane::HudLab => &HUD_LAB_ICON,
             Pane::Activity => &ACTIVITY_ICON,
             Pane::WhatsNew => &icons::PLAIN_BOOK,
         }
     }
+}
+
+/// Adopted settings may hide the pane on screen: the Hex Microphone turned off
+/// from `hex settings` hides Voice Filter, and Labs › Modes editor turned off
+/// while the editor shows hides Modes. The window leaves, Output standing in
+/// for the editor it replaced. Returns whether the pane moved.
+pub(super) fn leave_hidden_pane(ui: &mut Ui) -> bool {
+    if ui.pane.shown(ui) {
+        return false;
+    }
+    ui.pane = match ui.pane {
+        Pane::Modes => Pane::Output,
+        _ => Pane::General,
+    };
+    ui.close_modal();
+    ui.open = None;
+    true
 }
 
 /// macOS draws the traffic lights over the sidebar (Rune's window has a

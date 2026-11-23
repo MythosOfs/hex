@@ -30,6 +30,21 @@ pub(crate) struct HostState {
     pub(crate) window_open: bool,
 }
 
+fn autocorrect_undo() -> ControlReply {
+    #[cfg(target_os = "linux")]
+    {
+        match crate::linux::autocorrect::undo() {
+            Ok(true) => ControlReply::done("Undid the last correction"),
+            Ok(false) => {
+                ControlReply::error("no-correction", "No correction to undo at the cursor")
+            }
+            Err(error) => ControlReply::error("unavailable", error),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    ControlReply::error("unsupported", "Autocorrect undo requires Linux Wayland")
+}
+
 /// One OS's adapter. Every method returns promptly; [`answer`] does the
 /// waiting on the transport's worker thread.
 pub(crate) trait Host {
@@ -165,6 +180,7 @@ fn command(host: &dyn Host, command: ControlCommand) -> ControlReply {
             host.paste_last()
                 .map(|()| ControlReply::done("Pasting the last dictation")),
         ),
+        ControlCommand::AutocorrectUndo => autocorrect_undo(),
         ControlCommand::TypedText => reply(
             host.typed_text()
                 .map(|()| ControlReply::done("Transforming the focused text")),

@@ -66,6 +66,11 @@ pub(super) fn merged(
         .chain(annotate)
         .chain(calls)
         .chain(edits)
+        .chain(match language {
+            Language::French => super::autocorrect::FRENCH,
+            Language::Portuguese => super::autocorrect::PORTUGUESE,
+            Language::Russian => super::autocorrect::RUSSIAN,
+        })
         .copied()
         .collect()
 }

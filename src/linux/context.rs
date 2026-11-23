@@ -248,6 +248,15 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for Toplevels {
     }
 }
 
+/// The focused app's catalog name, keeping Hex's own app ID recognizable.
+pub(crate) fn focused_wayland_application() -> Option<String> {
+    let id = wayland_focused_window()?.app_id?;
+    if id == super::portal::APP_ID {
+        return Some(id);
+    }
+    crate::application_catalog::desktop_application_name(&id).or_else(|| Some(id.to_lowercase()))
+}
+
 /// The activated toplevel from `zwlr_foreign_toplevel_manager_v1`, or
 /// `None` when the compositor doesn't offer it.
 fn wayland_focused_window() -> Option<FocusedWindow> {

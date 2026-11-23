@@ -101,6 +101,11 @@ pub enum ControlCli {
         #[command(flatten)]
         output: Output,
     },
+    /// Undo the latest correction in the focused Wayland text field (Linux).
+    AutocorrectUndo {
+        #[command(flatten)]
+        output: Output,
+    },
     /// Transcribe an audio or video file with the selected model and print
     /// the text.
     ///
@@ -476,6 +481,7 @@ pub fn run(command: ControlCli, top_level: impl FnOnce() -> clap::Command) -> u8
         }
         ControlCli::PasteLast { output } => send(ControlCommand::PasteLast, output),
         ControlCli::TypedText { output } => send(ControlCommand::TypedText, output),
+        ControlCli::AutocorrectUndo { output } => send(ControlCommand::AutocorrectUndo, output),
         ControlCli::Transcribe {
             file,
             model,

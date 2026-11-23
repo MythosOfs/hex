@@ -152,6 +152,8 @@ pub(super) enum PickerTarget {
     #[default]
     Mode,
     YoloMode,
+    #[cfg(target_os = "linux")]
+    Autocorrect,
 }
 
 enum Applications {
@@ -522,6 +524,8 @@ fn picked(ui: &Ui) -> Vec<String> {
             .map(|mode| mode.applications.clone())
             .unwrap_or_default(),
         PickerTarget::YoloMode => ui.settings.labs.yolo_mode_apps.clone(),
+        #[cfg(target_os = "linux")]
+        PickerTarget::Autocorrect => ui.settings.labs.autocorrect_excluded_apps.clone(),
     }
 }
 
@@ -539,6 +543,18 @@ pub(super) fn toggle_picker(ui: &mut Ui, target: PickerTarget) {
 }
 
 fn add_application(ui: &mut Ui, name: String) {
+    #[cfg(target_os = "linux")]
+    if ui.modes.picker_target == PickerTarget::Autocorrect {
+        if !ui.settings.labs.autocorrect_excluded_apps.contains(&name) {
+            ui.update(|settings| {
+                let apps = &mut settings.labs.autocorrect_excluded_apps;
+                apps.push(name);
+                apps.sort_by_key(|name| name.to_lowercase());
+            });
+        }
+        close_picker(ui);
+        return;
+    }
     if ui.modes.picker_target == PickerTarget::YoloMode {
         if !ui.settings.labs.yolo_mode_apps.contains(&name) {
             ui.update(|settings| {

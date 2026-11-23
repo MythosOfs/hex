@@ -4085,6 +4085,8 @@ fn goldens() {
     check_golden("vocabulary-budget", false, PANE_SIZE);
     check_golden("windows-labs", false, PANE_SIZE);
     check_golden("linux-labs", false, PANE_SIZE);
+    check_golden("autocorrect", false, PANE_SIZE);
+    check_golden("autocorrect", true, PANE_SIZE);
     check_golden("history-menu", true, PANE_SIZE);
 }
 

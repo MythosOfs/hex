@@ -82,6 +82,12 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        URL, e-mail, and number fields are skipped; while it holds the seat, Live typing and other
 │                                        input methods (Fcitx5, IBus) get it unavailable. Apps need text-input-v3 surrounding text
 │                                        (GTK, Qt, Firefox; Chromium/Electron with --enable-wayland-ime)
+│                                        The Autocorrect sidebar page manages disabled apps and learned entries.
+│                                        Its separate text snippets switch starts off. With it on, an exact ;keyword
+│                                        followed by Space expands in an allowed app. The autocorrect-undo CLI restores
+│                                        the latest edit at the cursor, without learning it.
+│                                        Observed in nested Hyprland with GTK4: the Alt+right-click binding undoes an edit,
+│                                        and excluding and re-enabling an app changes both corrections and snippet expansion.
 │                                        // checks: linux::autocorrect (field, correct, learned, model); live_compositor (ignored, needs a compositor)
 ├── Appearance      no    labs.appearance + labs.appearance_theme (system/light/dark, default system)  the main window is forced light or dark instead of following the system; the dictation HUD (including its onboarding and Sounds previews) and meeting recording pill remain dark. Other overlays follow the OS. On Windows the title bar follows too, through its background and light/dark mode; Windows 10 has no caption colour, so DWM keeps its own light or dark caption background (builds before 19041 keep the OS caption) while its text and buttons follow
 ├── Live chapters   no    labs.live_chapters                     chapters a meeting while it records, boundary pass after Stop

@@ -169,6 +169,10 @@ impl Pump {
             ControlCommand::Dictation { .. } | ControlCommand::PasteLast => {
                 unreachable!("listener_command answers it")
             }
+            ControlCommand::AutocorrectUndo => Some(ControlReply::error(
+                "unsupported",
+                "Autocorrect undo requires Linux Wayland",
+            )),
             ControlCommand::TypedText => Some(ControlReply::error(
                 "unsupported",
                 "Transform typed text is Linux only",

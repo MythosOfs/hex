@@ -30,7 +30,7 @@ pub fn live_typing() -> bool {
 }
 
 /// Autocorrect: fix clear typos in typed text through a Wayland input
-/// method and learn your words (Linux; read by its thread every half second).
+/// method and learn your words (Linux; read by its input method thread).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn autocorrect() -> bool {
     feature_on(Feature::Autocorrect)
