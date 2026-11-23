@@ -50,6 +50,8 @@ struct Reading {
     capital: bool,
     /// The model and its word, None for a word you taught.
     word: Option<(usize, u32)>,
+    /// The slips' share of `score`.
+    edits: f32,
 }
 
 impl Corrector {
@@ -158,6 +160,7 @@ impl Corrector {
                     capital: model.capital_share(&text).is_some_and(|share| share >= 95),
                     text,
                     word: Some((index, word)),
+                    edits: edits * EDIT_NATS,
                 });
             }
         }
@@ -169,6 +172,7 @@ impl Corrector {
                     score: edits * EDIT_NATS + LEARNED_NATS,
                     capital: false,
                     word: None,
+                    edits: edits * EDIT_NATS,
                 });
             }
         }
@@ -198,6 +202,26 @@ impl Corrector {
             .filter_map(|model| model.capital_share(word))
             .any(|share| share >= 95);
         Some((word.clone(), capital))
+    }
+
+    /// Experiment: each distinct reading of `typed` as (text, slip nats,
+    /// total nats with the previous word), best first.
+    #[cfg(test)]
+    pub(crate) fn candidates(
+        &self,
+        typed: &str,
+        previous: Option<&str>,
+        learned: &Learned,
+    ) -> Vec<(String, f32, f32)> {
+        let mut readings = self.readings(&typed.to_lowercase(), previous, learned);
+        readings.sort_by(|a, b| a.score.total_cmp(&b.score));
+        let mut seen = std::collections::HashSet::new();
+        readings
+            .into_iter()
+            .filter(|r| seen.insert(r.text.to_lowercase()))
+            .take(8)
+            .map(|r| (r.text, r.edits, r.score))
+            .collect()
     }
 
     /// Whether `word` could be `typo` typed with a slip or two, not another

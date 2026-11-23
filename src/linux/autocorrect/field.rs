@@ -313,6 +313,82 @@ mod tests {
         assert!(learned.knows("realy") && learned.knows("goood"));
     }
 
+    /// Experiment: types `HEX_AUTOCORRECT_REPLAY`'s `lang ref typed` rows key
+    /// by key, prints the counts, and writes each typo word's candidates to
+    /// `HEX_AUTOCORRECT_DUMP`.
+    #[test]
+    #[ignore = "experiment: needs HEX_AUTOCORRECT_REPLAY"]
+    fn replay() {
+        use std::fmt::Write as _;
+        let cases =
+            std::fs::read_to_string(std::env::var("HEX_AUTOCORRECT_REPLAY").unwrap()).unwrap();
+        let corrector = Corrector::built_in();
+        let mut dump = String::new();
+        let (mut typos, mut right, mut wrong, mut clean, mut harmed) = (0, 0, 0, 0, 0);
+        let started = std::time::Instant::now();
+        for (id, line) in cases.lines().enumerate() {
+            let mut cols = line.split('\t');
+            let (lang, reference, typed) = (
+                cols.next().unwrap(),
+                cols.next().unwrap(),
+                cols.next().unwrap(),
+            );
+            let mut learned = Learned::default();
+            let mut field = Field::default();
+            let mut text = String::new();
+            type_into(
+                &mut field,
+                &corrector,
+                &mut learned,
+                &mut text,
+                &format!("{typed} . "),
+            );
+            let finals: Vec<&str> = text.trim_end_matches(" . ").split(' ').collect();
+            let refs: Vec<&str> = reference.split(' ').collect();
+            let typeds: Vec<&str> = typed.split(' ').collect();
+            assert_eq!(finals.len(), refs.len(), "{text}");
+            for i in 0..refs.len() {
+                let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+                if same(typeds[i], refs[i]) {
+                    clean += 1;
+                    harmed += usize::from(!same(finals[i], refs[i]));
+                } else {
+                    typos += 1;
+                    if same(finals[i], refs[i]) {
+                        right += 1;
+                    } else if !same(finals[i], typeds[i]) {
+                        wrong += 1;
+                    }
+                }
+                let previous = (i > 0).then(|| finals[i - 1]);
+                let candidates: Vec<String> = corrector
+                    .candidates(typeds[i], previous, &Learned::default())
+                    .into_iter()
+                    .map(|(t, e, s)| format!("{t}:{e:.2}:{s:.2}"))
+                    .collect();
+                writeln!(
+                    dump,
+                    "{id}\t{lang}\t{i}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    finals[..i].join(" "),
+                    finals.get(i + 1).copied().unwrap_or(""),
+                    refs[i],
+                    typeds[i],
+                    finals[i],
+                    candidates.join("|")
+                )
+                .unwrap();
+            }
+        }
+        if let Ok(path) = std::env::var("HEX_AUTOCORRECT_DUMP") {
+            std::fs::write(path, dump).unwrap();
+        }
+        eprintln!(
+            "typos {typos}: fixed right {right}, fixed wrong {wrong}, left {}; clean {clean}: changed {harmed}; {:?}",
+            typos - right - wrong,
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn pastes_jumps_and_glued_tokens_are_left_alone() {
         let corrector = Corrector::built_in();
