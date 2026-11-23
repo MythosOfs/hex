@@ -77,10 +77,11 @@ impl Corrector {
             return Verdict::Leave;
         }
         let lower = typed.to_lowercase();
-        if SHORTHAND.contains(&lower.as_str())
-            || learned.knows(&lower)
-            || self.models.iter().any(|model| model.knows(&lower))
-        {
+        let knows =
+            |word: &str| learned.knows(word) || self.models.iter().any(|model| model.knows(word));
+        // A possessive or contraction of a known word ("Tom's", "geht's").
+        let base = lower.split('\'').next().unwrap_or_default();
+        if SHORTHAND.contains(&lower.as_str()) || knows(&lower) || (base != lower && knows(base)) {
             return Verdict::Leave;
         }
         if let Some(word) = learned.typo(&lower) {
@@ -489,6 +490,9 @@ mod tests {
             "GitHub",
             "ab",
             "x2y",
+            "Tom's",
+            "husband's",
+            "geht's",
         ] {
             assert_eq!(fix(&corrector, typed, None), None, "{typed}");
         }
